@@ -52,7 +52,10 @@ pub fn claimed_in(state: &SessionState, dir: &Path) -> HashSet<String> {
             for root in spellings(Path::new(&written)) {
                 // Neither inside the other: nothing of this torrent can be
                 // here, and its file list is not worth asking for.
-                if !dirs.iter().any(|dir| root.starts_with(dir) || dir.starts_with(&root)) {
+                if !dirs
+                    .iter()
+                    .any(|dir| root.starts_with(dir) || dir.starts_with(&root))
+                {
                     continue;
                 }
                 claim(&root);
@@ -122,7 +125,10 @@ pub fn orphans(dir: &Path, claimed: &HashSet<String>) -> std::io::Result<Vec<Orp
 pub fn delete(dir: &Path, name: &str, claimed: &HashSet<String>) -> Result<(), String> {
     // One component, and an ordinary one: no way out of `dir` from here.
     let mut parts = Path::new(name).components();
-    if !matches!((parts.next(), parts.next()), (Some(Component::Normal(_)), None)) {
+    if !matches!(
+        (parts.next(), parts.next()),
+        (Some(Component::Normal(_)), None)
+    ) {
         return Err("not an entry of this directory".into());
     }
     if claimed.contains(name) {

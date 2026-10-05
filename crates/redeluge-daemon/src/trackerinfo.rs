@@ -23,8 +23,10 @@
 //! nearly everywhere it was ever offered.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use redeluge_rencode::Value;
+use serde::{Deserialize, Serialize};
 
 use crate::state::TorrentState;
 use crate::torrent::{tracker_host, tracker_hostname, tracker_says_unregistered};
@@ -316,6 +318,88 @@ pub fn detail(rows: &[Row], host: &str) -> Value {
     Value::Dict(pairs)
 }
 
+/// When a tracker domain last went up or down.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Change {
+    pub up: bool,
+    /// Unix seconds.
+    pub since: f64,
+}
+
+/// The last change of every domain, kept across restarts.
+///
+/// Only `ok` and `down` move it. `warning` and `unknown` say nothing either
+/// way (a stale announce, or every torrent paused), and letting them reset the
+/// clock would make "down for a day" impossible to reach on a tracker that
+/// flickers. Kept on disk because a rule deletes on it: a restart that forgot
+/// the date would only delay that, but a daemon restarted nightly would never
+/// get there.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct Changes(BTreeMap<String, Change>);
+
+impl Changes {
+    fn path(config_dir: &Path) -> PathBuf {
+        config_dir.join("tracker-changes.json")
+    }
+
+    pub fn load(config_dir: &Path) -> Self {
+        std::fs::read_to_string(Self::path(config_dir))
+            .ok()
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, config_dir: &Path) -> std::io::Result<()> {
+        let path = Self::path(config_dir);
+        let temporary = path.with_extension("json.tmp");
+        std::fs::write(&temporary, serde_json::to_vec(self)?)?;
+        std::fs::rename(&temporary, &path)
+    }
+
+    pub fn get(&self, host: &str) -> Option<&Change> {
+        self.0.get(host)
+    }
+
+    /// When this domain went down, if it is down.
+    pub fn down_since(&self, host: &str) -> Option<f64> {
+        self.0
+            .get(host)
+            .filter(|change| !change.up)
+            .map(|change| change.since)
+    }
+
+    /// Takes in what each domain looks like now. Answers with the domains
+    /// that flipped, and whether they are now up, and whether anything needs
+    /// saving: a domain seen for the first time is recorded without being
+    /// called a flip.
+    pub fn observe(
+        &mut self,
+        health: &BTreeMap<String, Totals>,
+        now: f64,
+    ) -> (Vec<(String, bool)>, bool) {
+        let mut flipped = Vec::new();
+        let mut changed = false;
+        for (host, totals) in health {
+            let up = match totals.health() {
+                "ok" => true,
+                "down" => false,
+                _ => continue,
+            };
+            match self.0.get(host) {
+                Some(change) if change.up == up => {}
+                previous => {
+                    if previous.is_some() {
+                        flipped.push((host.clone(), up));
+                    }
+                    self.0.insert(host.clone(), Change { up, since: now });
+                    changed = true;
+                }
+            }
+        }
+        (flipped, changed)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,6 +443,46 @@ mod tests {
             .find(|(name, _)| matches!(name, Value::Str(name) if name == key))
             .map(|(_, value)| value)
             .unwrap_or_else(|| panic!("no key {key}"))
+    }
+
+    #[test]
+    fn the_clock_moves_only_when_a_tracker_goes_up_or_down() {
+        let up = vec![row(
+            "https://t.example/announce",
+            vec![entry("https://t.example/announce", 0, true)],
+        )];
+        let down = vec![row(
+            "https://t.example/announce",
+            vec![entry("https://t.example/announce", 3, false)],
+        )];
+        let unknown = vec![row(
+            "https://t.example/announce",
+            vec![entry("https://t.example/announce", 0, false)],
+        )];
+        let host = tracker_host("https://t.example/announce");
+
+        let mut changes = Changes::default();
+        // First sight is recorded, not reported.
+        assert!(changes.observe(&by_domain(&up), 100.0).0.is_empty());
+        assert_eq!(changes.down_since(&host), None);
+
+        assert_eq!(
+            changes.observe(&by_domain(&down), 200.0).0,
+            vec![(host.clone(), false)]
+        );
+        assert_eq!(changes.down_since(&host), Some(200.0));
+
+        // Still down, or not saying: the date it went down stands.
+        assert!(changes.observe(&by_domain(&down), 300.0).0.is_empty());
+        assert!(changes.observe(&by_domain(&unknown), 400.0).0.is_empty());
+        assert_eq!(changes.down_since(&host), Some(200.0));
+
+        assert_eq!(
+            changes.observe(&by_domain(&up), 500.0).0,
+            vec![(host.clone(), true)]
+        );
+        assert_eq!(changes.down_since(&host), None);
+        assert_eq!(changes.get(&host).map(|change| change.since), Some(500.0));
     }
 
     fn int(value: &Value, key: &str) -> i64 {

@@ -183,6 +183,21 @@ Deluge.TrackerInfoWindow = Ext.extend(Ext.Window, {
         var rows = '';
         rows += this.row(_('Trackers'), String((info.trackers || []).length));
         rows += this.row(_('Torrents'), String(info.torrents || 0));
+        // When it last went up or down, as the daemon's sweep saw it.
+        if (info.since) {
+            var ago = Math.max(
+                0,
+                Math.round(new Date().getTime() / 1000 - info.since)
+            );
+            var since = String.format(
+                _('{0} ({1} ago)'),
+                fdate(info.since),
+                ftime(ago) || _('just now')
+            );
+            rows += info.up
+                ? this.row(_('Up since'), since)
+                : this.row(_('Down since'), this.bad(since));
+        }
         rows += this.row(_('States'), this.states(info.states));
         rows += this.row(
             _('Swarm'),

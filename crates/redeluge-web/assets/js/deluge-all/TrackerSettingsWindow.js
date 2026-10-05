@@ -362,6 +362,15 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
         if (options['auto_label'] && options['label']) {
             lines.push(this.describeLabel(finished, options));
         }
+        if (options['remove_when_down']) {
+            lines.push(
+                String.format(
+                    _('{0} unfinished would be removed with their files if this tracker stays down for {1}.'),
+                    this.torrents.length - finished.length,
+                    ftime(options['remove_down_hours'] * 3600) || _('any time at all')
+                )
+            );
+        }
         if (options['auto_limit']) {
             lines.push(
                 String.format(
@@ -829,6 +838,23 @@ Deluge.TrackerSettingsWindow.RULES = [
                 warn: _(
                     'The files will be deleted from disk. There is no undo, and nothing else is asked first.'
                 ),
+            },
+        ],
+    },
+    {
+        key: 'remove_when_down',
+        title: _('Remove downloads when the tracker is down'),
+        boxLabel: _('Remove unfinished downloads, with their files'),
+        note: _(
+            'Once this tracker has been down this long, counted from when it stopped answering. Finished torrents are not touched, and a label that refuses removals still wins. The files deleted are partial downloads that cannot be finished without the tracker.'
+        ),
+        fields: [
+            {
+                name: 'remove_down_hours',
+                xtype: 'durationfield',
+                fieldLabel: _('Down for:'),
+                width: 220,
+                value: 24,
             },
         ],
     },

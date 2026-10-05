@@ -276,6 +276,18 @@ removal is the same removal `core.remove_torrent` performs, announced to every
 connected client the same way, so an interface showing the torrent lets go of
 it rather than holding a row that no longer exists.
 
+| Option | |
+|---|---|
+| `remove_when_down` | Remove a torrent that has **not** finished, with its files, once its tracker has been down long enough |
+| `remove_down_hours` | How long the tracker has to have been down. `24` by default |
+
+"Down" is the sidebar's red: every announce failing and none answering. The
+daemon checks every minute and keeps, per tracker, when it last went up or
+down, in `tracker-changes.json` beside `core.conf`, so a restart does not start
+the clock again. A paused tracker, or one with a stale announce, does not move
+the clock either way. The info window shows the date, and the Activity window
+gets a line each time a tracker goes down or comes back.
+
 ### What "finished" means, and the one case it does not cover
 
 Every wait is measured from the moment the download finished, which is the time

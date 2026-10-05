@@ -198,6 +198,8 @@ Deluge.ActivityWindow = Ext.extend(Ext.Window, {
             changed: _('Changed'),
             limited: _('Limited'),
             added: _('Added'),
+            down: _('Down'),
+            up: _('Up'),
         };
         return names[value] || Ext.util.Format.htmlEncode(value);
     },

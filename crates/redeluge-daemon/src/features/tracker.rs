@@ -80,6 +80,18 @@ pub struct Options {
     #[serde(default)]
     pub remove_data: bool,
 
+    /// Remove a torrent that has not finished, with its files, once its
+    /// tracker has been down this long.
+    ///
+    /// A download whose tracker is gone will not get far, and its partial
+    /// files are of no use to anybody. Measured from when the tracker went
+    /// down, as `trackerinfo::Changes` recorded it.
+    #[serde(default)]
+    pub remove_when_down: bool,
+
+    #[serde(default = "a_day")]
+    pub remove_down_hours: f64,
+
     // ---------------------------------------------------------------- moving
     /// Move the files once the torrent has finished and its delay is up.
     #[serde(default)]
@@ -143,6 +155,9 @@ pub struct Options {
     pub label_after_hours: f64,
 }
 
+fn a_day() -> f64 {
+    24.0
+}
 fn yes() -> bool {
     true
 }
@@ -159,6 +174,8 @@ impl Default for Options {
             auto_remove: false,
             remove_after_hours: 0.0,
             remove_data: false,
+            remove_when_down: false,
+            remove_down_hours: 24.0,
             auto_move: false,
             move_path: String::new(),
             move_after_hours: 0.0,
@@ -189,6 +206,8 @@ impl Options {
             auto_remove: self.auto_remove,
             remove_after_hours: hours(self.remove_after_hours),
             remove_data: self.remove_data,
+            remove_when_down: self.remove_when_down,
+            remove_down_hours: hours(self.remove_down_hours),
             auto_move: self.auto_move,
             move_path: self.move_path.trim().to_owned(),
             move_after_hours: hours(self.move_after_hours),
@@ -213,7 +232,7 @@ impl Options {
     /// labelling with no label are both entries somebody started and did not
     /// finish, and neither should cost a sweep of the library.
     pub fn acts(&self) -> bool {
-        self.removes() || self.moves() || self.labels() || self.limits()
+        self.removes() || self.remove_when_down || self.moves() || self.labels() || self.limits()
     }
 
     pub fn removes(&self) -> bool {

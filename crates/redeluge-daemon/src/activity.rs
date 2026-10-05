@@ -48,6 +48,8 @@ pub mod did {
     pub const CHANGED: &str = "changed";
     pub const LIMITED: &str = "limited";
     pub const ADDED: &str = "added";
+    pub const WENT_DOWN: &str = "down";
+    pub const CAME_UP: &str = "up";
 }
 
 /// One thing the daemon did on its own.

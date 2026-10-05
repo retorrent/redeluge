@@ -1406,12 +1406,11 @@ impl Rpc for Core {
                     .await
                     .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
                 // Sizing a directory walks all of it.
-                let found = tokio::task::spawn_blocking(move || {
-                    crate::cleanup::orphans(&dir, &claimed)
-                })
-                .await
-                .map_err(|err| RpcError::invalid_argument(err.to_string()))?
-                .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                let found =
+                    tokio::task::spawn_blocking(move || crate::cleanup::orphans(&dir, &claimed))
+                        .await
+                        .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+                        .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
                 Ok(Value::List(
                     found
                         .into_iter()
@@ -1978,7 +1977,22 @@ impl Rpc for Core {
             "redeluge.get_tracker_info" => {
                 let host = string_arg(&args, 0, "a tracker host")?;
                 let rows = self.tracker_rows().await?;
-                Ok(crate::trackerinfo::detail(&rows, &host))
+                let change = self
+                    .manager
+                    .with({
+                        let host = host.clone();
+                        move |state| state.tracker_changes.get(&host).cloned()
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                let mut info = crate::trackerinfo::detail(&rows, &host);
+                // When it last went up or down, as the sweep saw it. Absent
+                // for a domain that has been neither yet.
+                if let (Value::Dict(pairs), Some(change)) = (&mut info, change) {
+                    pairs.push((Value::Str("up".into()), Value::Bool(change.up)));
+                    pairs.push((Value::Str("since".into()), Value::Float64(change.since)));
+                }
+                Ok(info)
             }
 
             // One word per domain: `ok`, `warning`, `down` or `unknown`. The
@@ -2948,7 +2962,7 @@ impl Core {
     /// One pass under the session lock for both tracker questions: the health
     /// of every domain, and the detail of one. Building it twice would mean
     /// taking the lock twice for the same walk.
-    async fn tracker_rows(&self) -> Result<Vec<crate::trackerinfo::Row>, RpcError> {
+    pub(crate) async fn tracker_rows(&self) -> Result<Vec<crate::trackerinfo::Row>, RpcError> {
         self.manager
             .with(|state| {
                 let session_paused = state.session_paused;

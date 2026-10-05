@@ -944,6 +944,11 @@ async fn apply_tracker_rules(core: Arc<Core>) {
     loop {
         tokio::time::sleep(Duration::from_secs(60)).await;
 
+        // When each tracker went up or down, whether or not any rule is set:
+        // the info window shows it, and a rule turned on later has to find a
+        // tracker that has been down for a day already counted as such.
+        note_tracker_changes(&core).await;
+
         let settings =
             tracker::Settings::from_config(setting(&core, "tracker").await.as_ref()).sane();
         // Nothing configured is the normal case, and what is behind this check
@@ -1052,6 +1057,53 @@ async fn apply_tracker_rules(core: Arc<Core>) {
     }
 }
 
+/// Records which tracker domains went up or down since the last pass, saves
+/// the dates when anything changed, and writes each flip to the activity log.
+async fn note_tracker_changes(core: &Core) {
+    let rows = match core.tracker_rows().await {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::warn!(error = %err.message, "the torrent manager is not answering");
+            return;
+        }
+    };
+    let health = crate::trackerinfo::by_domain(&rows);
+    let at = now();
+    let flipped = core
+        .manager
+        .with(move |state| {
+            let (flipped, changed) = state.tracker_changes.observe(&health, at);
+            if changed {
+                if let Err(err) = state.tracker_changes.save(&state.config_dir) {
+                    tracing::warn!(error = %err, "could not save when the trackers went up or down");
+                }
+            }
+            flipped
+        })
+        .await
+        .unwrap_or_default();
+
+    for (host, up) in flipped {
+        tracing::info!(tracker = %host, up, "a tracker changed state");
+        record(
+            core,
+            Action::new(
+                rule::TRACKER,
+                if up { did::CAME_UP } else { did::WENT_DOWN },
+                at,
+            )
+            .detail(format!(
+                "{host} {}",
+                if up {
+                    "is answering again"
+                } else {
+                    "stopped answering"
+                }
+            )),
+        );
+    }
+}
+
 /// What one pass of the tracker rules has decided.
 #[derive(Default)]
 struct TrackerWork {
@@ -1103,6 +1155,13 @@ struct TrackerRemoval {
     name: String,
     host: String,
     with_data: bool,
+    why: Why,
+}
+
+/// Which of the two removal rules asked.
+enum Why {
+    Finished,
+    TrackerDown,
 }
 
 /// One pass over the library: what each tracker's rules have to say about it.
@@ -1231,6 +1290,31 @@ fn decide_tracker_work(
                     name: status.name.clone(),
                     host,
                     with_data: options.remove_data,
+                    why: Why::Finished,
+                });
+            }
+        }
+        // A download whose tracker has been gone too long, with its files:
+        // partial files of a torrent nobody can finish are only taking room.
+        // Disjoint from the rule above, which only takes finished torrents.
+        else if options.remove_when_down
+            && !status.is_finished
+            && !moving
+            && state
+                .tracker_changes
+                .down_since(&host)
+                .is_some_and(|since| tracker::due(since, now, options.remove_down_hours))
+        {
+            if labels.never_removes(&torrent.options.label) {
+                tracing::debug!(torrent = %id, label = %torrent.options.label,
+                    "its tracker is down long enough to remove this, and its label says not to");
+            } else {
+                work.removals.push(TrackerRemoval {
+                    id,
+                    name: status.name.clone(),
+                    host,
+                    with_data: true,
+                    why: Why::TrackerDown,
                 });
             }
         }
@@ -1317,15 +1401,21 @@ async fn remove_for_tracker(core: &Core, removal: &TrackerRemoval, at: f64) {
         &removal.name,
         with_data,
         rule::TRACKER,
-        format!(
-            "{} says its finished torrents go, {}",
-            removal.host,
-            if with_data {
-                "with their files"
-            } else {
-                "keeping their files"
-            }
-        ),
+        match removal.why {
+            Why::Finished => format!(
+                "{} says its finished torrents go, {}",
+                removal.host,
+                if with_data {
+                    "with their files"
+                } else {
+                    "keeping their files"
+                }
+            ),
+            Why::TrackerDown => format!(
+                "{} has been down too long to finish this, removed with its files",
+                removal.host
+            ),
+        },
         at,
     )
     .await;
