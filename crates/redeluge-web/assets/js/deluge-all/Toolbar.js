@@ -91,15 +91,32 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                         scope: this,
                     },
                     {
-                        // What each peer has done, which is a different
-                        // question from what the daemon has done and so a
-                        // different window.
-                        id: 'peers',
+                        // The windows somebody opens now and then rather than
+                        // every session, kept off the bar itself.
+                        id: 'tools',
                         disabled: true,
-                        text: _('Peers'),
-                        iconCls: 'icon-peers',
-                        handler: this.onPeersClick,
-                        scope: this,
+                        text: _('Tools'),
+                        menu: {
+                            items: [
+                                {
+                                    // What each peer has done, which is a
+                                    // different question from what the daemon
+                                    // has done and so a different window.
+                                    text: _('Peers'),
+                                    iconCls: 'icon-peers',
+                                    handler: this.onPeersClick,
+                                    scope: this,
+                                },
+                                {
+                                    // What is on disk that no torrent
+                                    // accounts for.
+                                    text: _('Cleanup'),
+                                    iconCls: 'icon-cleanup',
+                                    handler: this.onCleanupClick,
+                                    scope: this,
+                                },
+                            ],
+                        },
                     },
                     {
                         id: 'connectionman',
@@ -168,7 +185,7 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
         'pause',
         'resume',
         'activity',
-        'peers',
+        'tools',
     ],
 
     initComponent: function () {
@@ -255,6 +272,13 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
             deluge.peersWindow = new Deluge.PeersWindow();
         }
         deluge.peersWindow.show();
+    },
+
+    onCleanupClick: function () {
+        if (!deluge.cleanupWindow) {
+            deluge.cleanupWindow = new Deluge.CleanupWindow();
+        }
+        deluge.cleanupWindow.show();
     },
 
     onHelpClick: function () {

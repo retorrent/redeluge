@@ -76,9 +76,11 @@ pub const PLUGIN_METHODS: &[&str] = &[
 /// Label plugin's are — a list that does not say what can be called misleads.
 pub const REDELUGE_METHODS: &[&str] = &[
     "redeluge.create_torrent",
+    "redeluge.delete_orphans",
     "redeluge.get_create_torrent",
     "redeluge.get_created_torrent",
     "redeluge.get_identity_clients",
+    "redeluge.get_orphans",
     "redeluge.get_recent_actions",
     "redeluge.get_peers",
     "redeluge.get_tracker_health",
@@ -99,6 +101,7 @@ pub const REDELUGE_METHODS: &[&str] = &[
 /// here.
 const REDELUGE_PRIVILEGED_METHODS: &[&str] = &[
     "redeluge.create_torrent",
+    "redeluge.get_orphans",
     "redeluge.list_directory",
     // Reading a feed is the daemon fetching an address the caller chose, which
     // is not a read of anything this daemon holds: a read-only account could
@@ -859,6 +862,11 @@ impl Rpc for Core {
         // Reading what the daemon did to its own torrents is reading, and a
         // read-only account is entitled to know why something it can see is
         // paused. The few that are more than that are listed on their own.
+        // Deleting whatever the daemon's user can write, anywhere, is more
+        // than any torrent operation, and gets the level of the daemon itself.
+        if method == "redeluge.delete_orphans" {
+            return Some(AuthLevel::Admin);
+        }
         if REDELUGE_METHODS.contains(&method) {
             return Some(if REDELUGE_PRIVILEGED_METHODS.contains(&method) {
                 AuthLevel::Normal
@@ -1381,6 +1389,88 @@ impl Rpc for Core {
             "redeluge.list_directory" => {
                 let path = args.first().and_then(Value::as_str).unwrap_or("/");
                 Ok(list_directory(path))
+            }
+
+            // What is in a directory that no torrent accounts for, and deleting
+            // it. See `cleanup.rs`.
+            "redeluge.get_orphans" => {
+                let path = string_arg(&args, 0, "a path")?;
+                crate::cleanup::directory(&path).map_err(RpcError::invalid_argument)?;
+                let dir = std::path::PathBuf::from(&path);
+                let claimed = self
+                    .manager
+                    .with({
+                        let dir = dir.clone();
+                        move |state| crate::cleanup::claimed_in(state, &dir)
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                // Sizing a directory walks all of it.
+                let found = tokio::task::spawn_blocking(move || {
+                    crate::cleanup::orphans(&dir, &claimed)
+                })
+                .await
+                .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+                .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::List(
+                    found
+                        .into_iter()
+                        .map(|orphan| {
+                            Value::Dict(vec![
+                                (Value::Str("name".into()), Value::Str(orphan.name)),
+                                (
+                                    Value::Str("kind".into()),
+                                    Value::Str(
+                                        if orphan.directory { "dir" } else { "file" }.into(),
+                                    ),
+                                ),
+                                (Value::Str("size".into()), Value::Int(orphan.size)),
+                            ])
+                        })
+                        .collect(),
+                ))
+            }
+            "redeluge.delete_orphans" => {
+                let path = string_arg(&args, 0, "a path")?;
+                crate::cleanup::directory(&path).map_err(RpcError::invalid_argument)?;
+                let names: Vec<String> = args
+                    .get(1)
+                    .and_then(Value::as_list)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let dir = std::path::PathBuf::from(&path);
+                // Claimed again now, not as of the listing: see `cleanup.rs`.
+                let claimed = self
+                    .manager
+                    .with({
+                        let dir = dir.clone();
+                        move |state| crate::cleanup::claimed_in(state, &dir)
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                let by = context.username.clone();
+                let failed = tokio::task::spawn_blocking(move || {
+                    let mut failed = Vec::new();
+                    for name in names {
+                        match crate::cleanup::delete(&dir, &name, &claimed) {
+                            Ok(()) => tracing::info!(%by, path = %dir.join(&name).display(),
+                                "deleted: nothing of any torrent's"),
+                            Err(reason) => failed.push(Value::Dict(vec![
+                                (Value::Str("name".into()), Value::Str(name)),
+                                (Value::Str("error".into()), Value::Str(reason)),
+                            ])),
+                        }
+                    }
+                    failed
+                })
+                .await
+                .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::List(failed))
             }
 
             "core.get_completion_paths" => {
@@ -2350,7 +2440,7 @@ fn list_directory(path: &str) -> Value {
     ])
 }
 
-fn path_size(path: &str) -> i64 {
+pub(crate) fn path_size(path: &str) -> i64 {
     let path = std::path::Path::new(path);
     let Ok(meta) = std::fs::metadata(path) else {
         return -1;

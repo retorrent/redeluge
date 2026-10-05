@@ -1033,8 +1033,17 @@ async fn apply_tracker_rules(core: Arc<Core>) {
             }
         }
 
-        for candidate in work.moves {
-            start_tracker_move(&core, &candidate, now).await;
+        // One move at a time. Free space is measured before a move writes
+        // anything, so starting several in one pass lets each of them see the
+        // same room and together overfill the destination. Nothing starts while
+        // any move is still copying (this rule's, completion's or by hand);
+        // the next pass measures again once the disk says what it really has.
+        if !work.moving_now {
+            for candidate in work.moves {
+                if start_tracker_move(&core, &candidate, now).await {
+                    break;
+                }
+            }
         }
 
         for removal in work.removals {
@@ -1050,6 +1059,8 @@ struct TrackerWork {
     labels: Vec<TrackerLabel>,
     moves: Vec<TrackerMove>,
     removals: Vec<TrackerRemoval>,
+    /// Whether any torrent's files are being moved right now.
+    moving_now: bool,
 }
 
 /// Limits a tracker's rule wants a torrent to carry.
@@ -1107,6 +1118,7 @@ fn decide_tracker_work(
     let mut work = TrackerWork::default();
 
     for status in state.session.all_torrent_status() {
+        work.moving_now |= status.moving_storage;
         if !state.torrents.contains_key(&status.info_hash) {
             continue;
         }
@@ -1228,10 +1240,11 @@ fn decide_tracker_work(
 }
 
 /// Starts a move a tracker's rule asked for, if the destination has room.
+/// Says whether it started.
 ///
 /// The disk is measured here rather than in the pass above, so the session
 /// thread is not held for a `statvfs` per torrent.
-async fn start_tracker_move(core: &Core, candidate: &TrackerMove, at: f64) {
+async fn start_tracker_move(core: &Core, candidate: &TrackerMove, at: f64) -> bool {
     let destination = std::path::Path::new(&candidate.to);
     let source = std::path::Path::new(&candidate.from);
 
@@ -1248,7 +1261,7 @@ async fn start_tracker_move(core: &Core, candidate: &TrackerMove, at: f64) {
                 free, candidate.size
             ),
         );
-        return;
+        return false;
     }
 
     let id = candidate.id.clone();
@@ -1281,10 +1294,17 @@ async fn start_tracker_move(core: &Core, candidate: &TrackerMove, at: f64) {
                         candidate.host, candidate.to
                     )),
             );
+            true
         }
-        Ok(Err(err)) => tracing::warn!(torrent = %candidate.id, error = %err,
-            "could not move a torrent its tracker's rule is due to move"),
-        Err(err) => tracing::warn!(error = %err, "the torrent manager is not answering"),
+        Ok(Err(err)) => {
+            tracing::warn!(torrent = %candidate.id, error = %err,
+                "could not move a torrent its tracker's rule is due to move");
+            false
+        }
+        Err(err) => {
+            tracing::warn!(error = %err, "the torrent manager is not answering");
+            false
+        }
     }
 }
 
