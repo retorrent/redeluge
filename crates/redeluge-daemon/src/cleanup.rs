@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //! What sits in a directory that no torrent accounts for.
 //!
 //! For purging a disk after something went wrong: a torrent removed without

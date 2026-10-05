@@ -192,8 +192,31 @@ FOLDER = [
     '................',
 ]
 
+# A torrent that is refused: the barred disc, with the bar drawn thick and blue
+# and leaning the other way from `dead`'s thin grey one, so the swarm that is
+# empty and the torrent that is banned are not the same sign at a glance.
+BANNED = [
+    '................',
+    '.....kkkkkk.....',
+    '...kkwwwwwwkk...',
+    '..kBBwwwwwwwwk..',
+    '..kBBBwwwwwwwk..',
+    '.kwwBBBwwwwwwwk.',
+    '.kwwwBBBwwwwwwk.',
+    '.kwwwwBBBwwwwwk.',
+    '.kwwwwwBBBwwwwk.',
+    '.kwwwwwwBBBwwwk.',
+    '.kwwwwwwwBBBwwk.',
+    '..kwwwwwwwBBBk..',
+    '..kwwwwwwwwBBk..',
+    '...kkwwwwwwkk...',
+    '.....kkkkkk.....',
+    '................',
+]
+
 ICONS = {
     'activity': ACTIVITY,
+    'banned': BANNED,
     'create': CREATE,
     'dead': DEAD,
     'folder': FOLDER,

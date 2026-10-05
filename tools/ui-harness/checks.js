@@ -270,6 +270,43 @@
             say(pair[0] + ' builds', built);
         });
 
+        // --- every delay is drawn, whichever section it is in -------------
+        // The sections are cards, and a days-and-hours field laid out inside
+        // a hidden card measured nothing and drew nothing: every delay but
+        // the first section's went missing.
+        [
+            ['label', Deluge.LabelSettingsWindow, 1],
+            ['tracker', Deluge.TrackerSettingsWindow, 4],
+        ].forEach(function (spec) {
+            var window_ = new spec[1]();
+            var drawn = 0;
+            var seen = 0;
+            try {
+                // The window's own `show` asks the daemon for its settings.
+                Ext.Window.prototype.show.call(window_);
+                window_.cards.items.each(function (card, index) {
+                    window_.list.select(index);
+                    card.cascade(function (field) {
+                        if (field.getXType && field.getXType() === 'durationfield') {
+                            seen++;
+                            // The box around each spinner, which is what a hidden
+                            // card left at zero width, hiding the whole field.
+                            var boxes = [field.days, field.hours];
+                            if (boxes.every(function (box) { return box.wrap && box.wrap.getWidth() > 0; })) drawn++;
+                        }
+                    });
+                });
+                window_.destroy();
+            } catch (error) {
+                note('  the ' + spec[0] + ' window threw: ' + error.message);
+            }
+            say(
+                'every delay in the ' + spec[0] + ' settings is drawn (' +
+                    drawn + ' of ' + spec[2] + ')',
+                seen === spec[2] && drawn === spec[2]
+            );
+        });
+
         // --- a duration is days and hours, and still one number ----------
         var duration = new Deluge.DurationField({ fieldLabel: 'x' });
         duration.setValue(36.5);

@@ -124,6 +124,13 @@ class Reporter(http.server.SimpleHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(length).decode('utf-8', 'replace')
+        # Only the report. The interface itself posts to `/json` as it loads,
+        # and taking that for the report ended the run on one line of JSON
+        # before a single check had run — and called it a pass.
+        if self.path != '/results':
+            self.send_response(404)
+            self.end_headers()
+            return
         Reporter.results = [line for line in body.splitlines() if line.strip()]
         Reporter.finished.set()
         self.send_response(204)
@@ -156,7 +163,10 @@ def run_checks(browser: str, url: str, wait: float = 90.0) -> list[str]:
     No automation protocol and no driver to install: the page posts its own
     report, and the browser is closed the moment it arrives.
     """
-    with tempfile.TemporaryDirectory() as profile:
+    # Chrome's helpers can still be writing to the profile for a moment after
+    # the browser is gone, and the removal then fails on a directory that is
+    # not empty yet. What is left is a temporary directory; it is not a result.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as profile:
         browser_process = subprocess.Popen(
             [
                 browser,

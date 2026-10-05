@@ -94,7 +94,9 @@ pub struct Banned {
 pub struct Found {
     /// The entries to tell an *arr about now: hash, label.
     pub to_send: Vec<(String, String)>,
-    /// Torrents held for the first time: hash, name, reason.
+    /// Torrents banned in this pass, because of their tracker: hash, name,
+    /// reason. Re-holding one that was already banned, as every pass after a
+    /// restart does, is not news and is not reported.
     pub held: Vec<(String, String, String)>,
 }
 
@@ -177,7 +179,8 @@ pub fn enforce(
         if !state.torrents.contains_key(&hash) {
             continue;
         }
-        if !state.banned.contains(&hash) {
+        let new = !state.banned.contains(&hash);
+        if new {
             let trackers = state.tracker_list(&status, false);
             let announced = crate::torrent::current_tracker(&status.current_tracker, &trackers);
             let host = crate::torrent::tracker_host(&announced);
@@ -213,6 +216,8 @@ pub fn enforce(
         let torrent = state.torrents.get_mut(&hash).expect("just checked");
         if torrent.forced_error.as_deref() != Some(message.as_str()) {
             torrent.forced_error = Some(message);
+        }
+        if new {
             found.held.push((hash.clone(), name, reason));
         }
         if !status.is_paused || status.is_auto_managed() {

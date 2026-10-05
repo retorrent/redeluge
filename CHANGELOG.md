@@ -8,6 +8,48 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.9.0] — 2026-10-05
+
+### Added
+
+- **Banned torrents and blocked trackers.** *Blocklist* on a torrent's menu
+  bans it and deletes it with its files; *Block this tracker* in a tracker's
+  settings bans everything announcing there and deletes nothing. A banned
+  torrent is held — paused, out of the queue, in `Error` with `Blocked: <why>`
+  — resume is refused, and the same hash added again is held on arrival. The
+  list (`banned.json`) keeps the date, the name once known, the tracker, the
+  label and the reason. Tools, *Banned Torrents* shows it.
+- **Telling *arr software.** A label's settings take the address and API key
+  of the *arr that uses it as its category. A banned torrent of that label is
+  taken out of its queue and put on its blocklist, so it looks for another
+  release — at the next sweep with *Send banned torrents* on, or when somebody
+  presses *Send to *arr*. The key lives in `arr.json` (mode 600), is never
+  read back, and setting it needs an admin account.
+- **When a tracker went down or came back,** per domain, kept across restarts
+  (`tracker-changes.json`), shown in the tracker info window and written to
+  Activity.
+- **Remove unfinished downloads when the tracker is down** for a set time
+  (`remove_when_down`, `remove_down_hours`, a day by default), measured from
+  when it went down or when the torrent arrived, whichever is later.
+- **Cleanup**: lists what sits in a directory that no torrent accounts for,
+  one level deep, and deletes what is picked. What is claimed is decided again
+  at the moment of deleting.
+- A **Tools** menu on the toolbar holds Peers, Banned Torrents and Cleanup.
+
+### Changed
+
+- **Tracker rules move one torrent at a time.** Free space was measured before
+  any move wrote anything, so several moves started together each saw the same
+  room and could fill the destination between them. Nothing starts while a
+  move is in progress.
+- The label and tracker settings windows are laid out like Preferences: the
+  sections in a list on the left, one at a time on the right.
+
+### Fixed
+
+- The front-end checks failed on CI when Chrome was still writing its
+  temporary profile as it was removed.
+
 ## [1.8.1] — 2026-09-21
 
 ### Fixed
