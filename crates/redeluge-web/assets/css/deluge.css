@@ -157,6 +157,9 @@ button::-moz-focus-inner {
 .icon-activity {
     background-image: url('../icons/activity.png') !important;
 }
+.icon-banned {
+    background-image: url('../icons/banned.png') !important;
+}
 .icon-cleanup {
     background-image: url('../icons/drive.png') !important;
 }

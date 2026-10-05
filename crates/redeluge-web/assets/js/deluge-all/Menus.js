@@ -129,6 +129,9 @@ deluge.menus = {
             case 'move':
                 deluge.moveStorage.show(ids);
                 break;
+            case 'ban':
+                Deluge.BannedWindow.ban(ids);
+                break;
         }
     },
 };
@@ -434,6 +437,14 @@ deluge.menus.torrent = new Ext.menu.Menu({
             torrentAction: 'remove',
             text: _('Remove Torrent'),
             iconCls: 'icon-remove',
+            handler: deluge.menus.onTorrentActionShow,
+            scope: deluge.menus,
+        },
+        {
+            // Remove, and refuse it from now on: see `BannedWindow.js`.
+            torrentAction: 'ban',
+            text: _('Blocklist'),
+            iconCls: 'icon-banned',
             handler: deluge.menus.onTorrentActionShow,
             scope: deluge.menus,
         },

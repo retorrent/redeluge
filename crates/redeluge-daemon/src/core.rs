@@ -75,8 +75,11 @@ pub const PLUGIN_METHODS: &[&str] = &[
 /// can collide with one of these. They are advertised for the same reason the
 /// Label plugin's are — a list that does not say what can be called misleads.
 pub const REDELUGE_METHODS: &[&str] = &[
+    "redeluge.ban_torrents",
     "redeluge.create_torrent",
     "redeluge.delete_orphans",
+    "redeluge.get_arr",
+    "redeluge.get_banned",
     "redeluge.get_create_torrent",
     "redeluge.get_created_torrent",
     "redeluge.get_identity_clients",
@@ -86,7 +89,11 @@ pub const REDELUGE_METHODS: &[&str] = &[
     "redeluge.get_tracker_health",
     "redeluge.get_tracker_info",
     "redeluge.list_directory",
+    "redeluge.send_banned",
+    "redeluge.set_arr",
+    "redeluge.test_arr",
     "redeluge.test_feed",
+    "redeluge.unban_torrents",
     "redeluge.update_ui",
 ];
 
@@ -100,6 +107,12 @@ pub const REDELUGE_METHODS: &[&str] = &[
 /// `core.get_completion_paths` are both `Normal` — rather than a level chosen
 /// here.
 const REDELUGE_PRIVILEGED_METHODS: &[&str] = &[
+    // Banning deletes the files of what it bans, and the other two act on
+    // an *arr instance on this daemon's behalf.
+    "redeluge.ban_torrents",
+    "redeluge.send_banned",
+    "redeluge.unban_torrents",
+    "redeluge.get_arr",
     "redeluge.create_torrent",
     "redeluge.get_orphans",
     "redeluge.list_directory",
@@ -640,6 +653,12 @@ impl Core {
                 state
                     .torrents
                     .insert(id.clone(), Torrent::new(id.clone(), stored));
+                // Banned already: held from the first moment rather than at
+                // the next sweep, which would let it download for a minute.
+                // The sweep fills in why.
+                if state.banned.contains(&id) {
+                    crate::banned::hold(state, &id);
+                }
                 state.mark_dirty();
                 let _ = state.save_state();
                 Ok::<String, redeluge_libtorrent::Error>(id)
@@ -864,7 +883,12 @@ impl Rpc for Core {
         // paused. The few that are more than that are listed on their own.
         // Deleting whatever the daemon's user can write, anywhere, is more
         // than any torrent operation, and gets the level of the daemon itself.
-        if method == "redeluge.delete_orphans" {
+        // Writing an *arr's API key, and sending the stored one to an address
+        // the caller chooses, are both handing out a secret.
+        if method == "redeluge.delete_orphans"
+            || method == "redeluge.set_arr"
+            || method == "redeluge.test_arr"
+        {
             return Some(AuthLevel::Admin);
         }
         if REDELUGE_METHODS.contains(&method) {
@@ -958,34 +982,8 @@ impl Rpc for Core {
             "core.remove_torrent" => {
                 let id = string_arg(&args, 0, "a torrent id")?;
                 let with_data = args.get(1).and_then(Value::as_bool).unwrap_or(false);
-
-                self.manager.announce(Event::PreTorrentRemoved {
-                    torrent_id: id.clone(),
-                });
-                let removed = {
-                    let id = id.clone();
-                    self.manager
-                        .with(move |state| {
-                            let outcome = state.session.remove_torrent(&id, with_data);
-                            state.torrents.remove(&id);
-
-                            state.forget(&id);
-                            state.mark_dirty();
-                            let _ = state.save_state();
-                            outcome
-                        })
-                        .await
-                };
-
-                match removed {
-                    Ok(Ok(())) => {
-                        self.manager
-                            .announce(Event::TorrentRemoved { torrent_id: id });
-                        Ok(Value::Bool(true))
-                    }
-                    Ok(Err(err)) => Err(RpcError::new("InvalidTorrentError", err.to_string())),
-                    Err(err) => Err(RpcError::invalid_argument(err.to_string())),
-                }
+                self.remove_one(&id, with_data).await?;
+                Ok(Value::Bool(true))
             }
 
             // ------------------------------------------------------ control
@@ -1000,6 +998,11 @@ impl Rpc for Core {
                 self.manager
                     .with(move |state| {
                         for id in ids {
+                            // A banned torrent stays held until its ban is
+                            // lifted: see `banned.rs`.
+                            if !pause && state.banned.contains(&id) {
+                                continue;
+                            }
                             // Pausing by hand also turns off auto-management,
                             // or the queue would start it again immediately.
                             // Resuming by hand ends any hold the idle rule
@@ -1389,6 +1392,202 @@ impl Rpc for Core {
             "redeluge.list_directory" => {
                 let path = args.first().and_then(Value::as_str).unwrap_or("/");
                 Ok(list_directory(path))
+            }
+
+            // ---------------------------------------------- banned torrents
+            // See `banned.rs` and `arr.rs`.
+            "redeluge.get_banned" => {
+                let entries = self
+                    .manager
+                    .with(|state| {
+                        let mut entries: Vec<_> = state
+                            .banned
+                            .torrents
+                            .iter()
+                            .map(|(hash, entry)| {
+                                (
+                                    hash.clone(),
+                                    entry.clone(),
+                                    state.torrents.contains_key(hash),
+                                )
+                            })
+                            .collect();
+                        entries.sort_by(|a, b| b.1.at.total_cmp(&a.1.at));
+                        entries
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::List(
+                    entries
+                        .into_iter()
+                        .map(|(hash, entry, present)| banned_value(&hash, &entry, present))
+                        .collect(),
+                ))
+            }
+            // Bans, tells the label's *arr if it is set up to be told, then
+            // deletes the torrent and its files. The order matters: an *arr
+            // finds the download in its queue by the client still having it.
+            "redeluge.ban_torrents" => {
+                let ids = torrent_ids(&args, 0);
+                let reason = args
+                    .get(1)
+                    .and_then(Value::as_str)
+                    .filter(|reason| !reason.trim().is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| "banned by hand".to_owned());
+                let delete = args.get(2).and_then(Value::as_bool).unwrap_or(true);
+                let at = crate::features::now();
+
+                let mut answers = Vec::new();
+                for id in ids {
+                    let (present, sends) = self
+                        .manager
+                        .with({
+                            let (id, reason) = (id.clone(), reason.clone());
+                            move |state| {
+                                let label = state
+                                    .torrents
+                                    .get(&id)
+                                    .map(|torrent| torrent.options.label.clone())
+                                    .unwrap_or_default();
+                                let sends = state.arr.sends(&label);
+                                crate::banned::ban(state, &id, &reason, sends, at);
+                                if let Some(entry) = state.banned.torrents.get_mut(&id) {
+                                    // Already banned by a tracker: this is
+                                    // somebody's decision now.
+                                    entry.reason = reason.clone();
+                                }
+                                // Held now rather than at the next sweep, for
+                                // a ban that does not delete it.
+                                if let Some(torrent) = state.torrents.get_mut(&id) {
+                                    torrent.forced_error =
+                                        Some(crate::banned::held_message(&reason));
+                                    crate::banned::hold(state, &id);
+                                }
+                                let _ = state.banned.save(&state.config_dir);
+                                (state.torrents.contains_key(&id), sends)
+                            }
+                        })
+                        .await
+                        .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                    tracing::info!(torrent = %id, by = %context.username, "banned");
+
+                    let arr = if sends {
+                        Some(self.tell_arr(&id, true).await)
+                    } else {
+                        None
+                    };
+                    let removed = present && delete && self.remove_one(&id, true).await.is_ok();
+                    let mut pairs = vec![
+                        (Value::Str("id".into()), Value::Str(id)),
+                        (Value::Str("removed".into()), Value::Bool(removed)),
+                    ];
+                    if let Some(arr) = arr {
+                        pairs.push((Value::Str("arr".into()), arr_outcome_value(&arr)));
+                    }
+                    answers.push(Value::Dict(pairs));
+                }
+                Ok(Value::List(answers))
+            }
+            "redeluge.unban_torrents" => {
+                let hashes = torrent_ids(&args, 0);
+                let lifted = self
+                    .manager
+                    .with(move |state| crate::banned::unban(state, &hashes))
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                Ok(Value::Int(lifted as i64))
+            }
+            // Tells the *arr now, whatever the label's switch says: somebody
+            // pressed Send.
+            "redeluge.send_banned" => {
+                let mut answers = Vec::new();
+                for hash in torrent_ids(&args, 0) {
+                    let outcome = self.tell_arr(&hash, false).await;
+                    answers.push(Value::Dict(vec![
+                        (Value::Str("id".into()), Value::Str(hash)),
+                        (Value::Str("arr".into()), arr_outcome_value(&outcome)),
+                    ]));
+                }
+                Ok(Value::List(answers))
+            }
+            // A label's instance, without its key: only whether there is one.
+            "redeluge.get_arr" => {
+                let label = string_arg(&args, 0, "a label")?;
+                let target = self
+                    .manager
+                    .with(move |state| state.arr.labels.get(&label).cloned())
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+                    .unwrap_or_default();
+                Ok(Value::Dict(vec![
+                    (Value::Str("url".into()), Value::Str(target.url)),
+                    (
+                        Value::Str("has_key".into()),
+                        Value::Bool(!target.api_key.is_empty()),
+                    ),
+                    (
+                        Value::Str("send_blocklist".into()),
+                        Value::Bool(target.send_blocklist),
+                    ),
+                ]))
+            }
+            // An empty key keeps the stored one; an empty address forgets
+            // the instance.
+            "redeluge.set_arr" | "redeluge.test_arr" => {
+                let label = string_arg(&args, 0, "a label")?;
+                let given = args.get(1).cloned().unwrap_or(Value::Dict(Vec::new()));
+                let text = |key: &str| {
+                    given
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_owned()
+                };
+                let mut target = crate::arr::Target {
+                    url: text("url"),
+                    api_key: text("api_key"),
+                    send_blocklist: given
+                        .get("send_blocklist")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                };
+                let test = method == "redeluge.test_arr";
+                let target = self
+                    .manager
+                    .with(move |state| {
+                        if target.api_key.is_empty() {
+                            if let Some(stored) = state.arr.labels.get(&label) {
+                                target.api_key = stored.api_key.clone();
+                            }
+                        }
+                        if !test {
+                            if target.url.is_empty() {
+                                state.arr.labels.remove(&label);
+                            } else {
+                                state.arr.labels.insert(label, target.clone());
+                            }
+                            if let Err(err) = state.arr.save(&state.config_dir) {
+                                tracing::warn!(error = %err, "could not save the *arr settings");
+                            }
+                        }
+                        target
+                    })
+                    .await
+                    .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+                if !test {
+                    return Ok(Value::None);
+                }
+                if !target.usable() {
+                    return Err(RpcError::invalid_argument(
+                        "an address and an API key are needed",
+                    ));
+                }
+                crate::arr::identify(crate::features::http_client(), &target)
+                    .await
+                    .map(Value::Str)
+                    .map_err(RpcError::invalid_argument)
             }
 
             // What is in a directory that no torrent accounts for, and deleting
@@ -2454,6 +2653,36 @@ fn list_directory(path: &str) -> Value {
     ])
 }
 
+/// One banned torrent, as `redeluge.get_banned` answers it.
+fn banned_value(hash: &str, entry: &crate::banned::Entry, present: bool) -> Value {
+    let text = |value: &str| Value::Str(value.to_owned());
+    Value::Dict(vec![
+        (text("id"), text(hash)),
+        (text("at"), Value::Float64(entry.at)),
+        (text("name"), text(&entry.name)),
+        (text("tracker"), text(&entry.tracker)),
+        (text("label"), text(&entry.label)),
+        (text("reason"), text(&entry.reason)),
+        (text("in_session"), Value::Bool(present)),
+        (text("arr_state"), text(entry.arr.state.as_str())),
+        (text("arr_message"), text(&entry.arr.message)),
+        (text("arr_at"), Value::Float64(entry.arr.at)),
+    ])
+}
+
+/// What came of telling an *arr, in a word and a sentence.
+fn arr_outcome_value(outcome: &Result<crate::arr::Outcome, String>) -> Value {
+    let (state, message) = match outcome {
+        Ok(crate::arr::Outcome::Blocklisted) => ("blocklisted", String::new()),
+        Ok(crate::arr::Outcome::NotInQueue) => ("not_in_queue", String::new()),
+        Err(err) => ("failed", err.clone()),
+    };
+    Value::Dict(vec![
+        (Value::Str("state".into()), Value::Str(state.into())),
+        (Value::Str("message".into()), Value::Str(message)),
+    ])
+}
+
 pub(crate) fn path_size(path: &str) -> i64 {
     let path = std::path::Path::new(path);
     let Ok(meta) = std::fs::metadata(path) else {
@@ -2956,6 +3185,111 @@ impl Core {
 
     // The shaping of that answer is `filter_tree_of`, below: `update_ui`
     // builds the same tree from a walk it has already done.
+
+    /// Removes one torrent, telling every client before and after, as
+    /// `core.remove_torrent` does.
+    pub(crate) async fn remove_one(&self, id: &str, with_data: bool) -> Result<(), RpcError> {
+        self.manager.announce(Event::PreTorrentRemoved {
+            torrent_id: id.to_owned(),
+        });
+        let removed = {
+            let id = id.to_owned();
+            self.manager
+                .with(move |state| {
+                    let outcome = state.session.remove_torrent(&id, with_data);
+                    state.torrents.remove(&id);
+
+                    state.forget(&id);
+                    state.mark_dirty();
+                    let _ = state.save_state();
+                    outcome
+                })
+                .await
+        };
+        match removed {
+            Ok(Ok(())) => {
+                self.manager.announce(Event::TorrentRemoved {
+                    torrent_id: id.to_owned(),
+                });
+                Ok(())
+            }
+            Ok(Err(err)) => Err(RpcError::new("InvalidTorrentError", err.to_string())),
+            Err(err) => Err(RpcError::invalid_argument(err.to_string())),
+        }
+    }
+
+    /// Tells the *arr of a banned torrent's label to blocklist it, and
+    /// records the answer on the entry. `automatic` keeps an entry the
+    /// instance has not seen yet waiting for another try.
+    pub(crate) async fn tell_arr(
+        &self,
+        hash: &str,
+        automatic: bool,
+    ) -> Result<crate::arr::Outcome, String> {
+        let target = self
+            .manager
+            .with({
+                let hash = hash.to_owned();
+                move |state| {
+                    let entry = state.banned.torrents.get(&hash)?;
+                    Some((entry.label.clone(), state.arr.target(&entry.label).cloned()))
+                }
+            })
+            .await
+            .map_err(|err| err.to_string())?;
+        let outcome = match target {
+            None => Err("this torrent is not on the banned list".to_owned()),
+            Some((label, None)) => Err(if label.is_empty() {
+                "it has no label, so no *arr to tell".to_owned()
+            } else {
+                format!("no *arr is set up for the label {label}")
+            }),
+            Some((_, Some(target))) => {
+                crate::arr::blocklist(crate::features::http_client(), &target, hash).await
+            }
+        };
+
+        let at = crate::features::now();
+        let name = self
+            .manager
+            .with({
+                let hash = hash.to_owned();
+                let outcome = outcome.clone();
+                move |state| {
+                    crate::banned::record_arr(state, &hash, &outcome, automatic, at);
+                    state
+                        .banned
+                        .torrents
+                        .get(&hash)
+                        .map(|entry| (entry.name.clone(), entry.label.clone()))
+                        .unwrap_or_default()
+                }
+            })
+            .await
+            .unwrap_or_default();
+        match &outcome {
+            Ok(crate::arr::Outcome::Blocklisted) => {
+                tracing::info!(torrent = %hash, label = %name.1, "blocklisted in the *arr");
+                self.manager.activity().record(
+                    crate::activity::Action::new(
+                        crate::activity::rule::BLOCKLIST,
+                        crate::activity::did::REPORTED,
+                        at,
+                    )
+                    .torrent(hash, &name.0)
+                    .detail(format!(
+                        "the *arr of {} blocklisted it and will look for another",
+                        name.1
+                    )),
+                );
+            }
+            Ok(crate::arr::Outcome::NotInQueue) => {
+                tracing::debug!(torrent = %hash, "not in the *arr's queue")
+            }
+            Err(err) => tracing::warn!(torrent = %hash, error = %err, "could not tell the *arr"),
+        }
+        outcome
+    }
 
     /// Every torrent, reduced to what a tracker is judged by.
     ///

@@ -14,7 +14,10 @@ use std::path::{Component, Path};
 
 use crate::manager::SessionState;
 
-/// The names directly inside `dir` that some torrent's files live under.
+/// The names directly inside `dir` that some torrent's files live under,
+/// in lower case: on a disk that ignores case, `Show` on disk is the torrent's
+/// `show`, and hiding a real orphan that differs only in case is the safe way
+/// to be wrong.
 ///
 /// A torrent claims an entry when any of its files would be written below it,
 /// from where it is now or from where it is being moved to, and when its save
@@ -36,7 +39,7 @@ pub fn claimed_in(state: &SessionState, dir: &Path) -> HashSet<String> {
         for dir in &dirs {
             if let Ok(rest) = path.strip_prefix(dir) {
                 if let Some(Component::Normal(first)) = rest.components().next() {
-                    claimed.insert(first.to_string_lossy().into_owned());
+                    claimed.insert(first.to_string_lossy().to_lowercase());
                 }
             }
         }
@@ -97,7 +100,7 @@ pub fn orphans(dir: &Path, claimed: &HashSet<String>) -> std::io::Result<Vec<Orp
     let mut found = Vec::new();
     for entry in std::fs::read_dir(dir)?.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if claimed.contains(&name) {
+        if claimed.contains(&name.to_lowercase()) {
             continue;
         }
         // Not following links: a link is what would be deleted, not what it
@@ -131,7 +134,7 @@ pub fn delete(dir: &Path, name: &str, claimed: &HashSet<String>) -> Result<(), S
     ) {
         return Err("not an entry of this directory".into());
     }
-    if claimed.contains(name) {
+    if claimed.contains(&name.to_lowercase()) {
         return Err("a torrent's files are in it".into());
     }
     let path = dir.join(name);
@@ -170,6 +173,8 @@ mod tests {
         assert!(delete(&dir, "..", &claimed).is_err());
         assert!(delete(&dir, "", &claimed).is_err());
         assert!(delete(&dir, "kept", &claimed).is_err());
+        // A torrent's folder in other capitals is still the torrent's.
+        assert!(delete(&dir, "KEPT", &claimed).is_err());
         assert!(dir.join("kept").exists());
 
         delete(&dir, "stale", &claimed).unwrap();

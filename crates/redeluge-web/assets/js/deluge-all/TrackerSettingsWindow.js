@@ -26,27 +26,17 @@ Ext.ns('Deluge');
 
 /**
  * @class Deluge.TrackerSettingsWindow
- * @extends Ext.Window
+ * @extends Deluge.SectionedWindow
  */
-Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
+Deluge.TrackerSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
     title: _('Tracker Settings'),
-    width: 520,
-    height: 660,
-    layout: 'fit',
-    buttonAlign: 'right',
-    closeAction: 'hide',
-    constrainHeader: true,
-    plain: true,
-    minWidth: 380,
-    minHeight: 260,
 
     initComponent: function () {
         // What the form in front of you would do, kept beside the OK button
         // rather than inside the scrolling form: the one moment it matters is
         // the moment before somebody presses OK on a rule that deletes things.
         // Set before the superclass runs, which is when a panel turns `bbar`
-        // into a toolbar; adding it afterwards would make it a second item of
-        // a `fit` layout, which draws one thing.
+        // into a toolbar.
         this.preview = new Ext.Toolbar.TextItem({ text: '' });
         this.bbar = [this.preview];
 
@@ -54,22 +44,6 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
 
         this.addButton(_('Cancel'), this.onCancel, this);
         this.addButton(_('OK'), this.onOk, this);
-
-        this.form = this.add({
-            xtype: 'form',
-            border: false,
-            autoScroll: true,
-            bodyStyle: 'padding: 5px',
-            labelWidth: 150,
-        });
-
-        this.form.add({
-            xtype: 'label',
-            text: _(
-                'These apply to every torrent that announces to this tracker, whenever it was added. Each is off until you turn it on, and no other tracker is affected.'
-            ),
-            style: 'display: block; margin: 0 4px 6px 4px; opacity: 0.72;',
-        });
 
         // Every field in the window by its setting name, and the switches by
         // the group they govern. Built from RULES so that adding a rule is
@@ -84,8 +58,19 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
     /**
      * One rule: its switch, its fields, and whatever it has to warn about.
      */
-    addRule: function (rule) {
-        var set = this.form.add({
+    addRule: function (rule, index) {
+        var page = this.addSection(rule.section);
+        // Said once, on the section the window opens on.
+        if (index === 0) {
+            page.add({
+                xtype: 'label',
+                text: _(
+                    'These apply to every torrent that announces to this tracker, whenever it was added. Each is off until you turn it on, and no other tracker is affected.'
+                ),
+                style: 'display: block; margin: 0 4px 6px 4px; opacity: 0.72;',
+            });
+        }
+        var set = page.add({
             xtype: 'fieldset',
             border: false,
             title: rule.title,
@@ -361,6 +346,14 @@ Deluge.TrackerSettingsWindow = Ext.extend(Ext.Window, {
         }
         if (options['auto_label'] && options['label']) {
             lines.push(this.describeLabel(finished, options));
+        }
+        if (options['block']) {
+            lines.push(
+                String.format(
+                    _('All {0} would be banned and held, nothing deleted.'),
+                    this.torrents.length
+                )
+            );
         }
         if (options['remove_when_down']) {
             lines.push(
@@ -686,6 +679,7 @@ Deluge.TrackerSettingsWindow.isNumber = function (xtype) {
  * tracker's entry in the configuration:
  *
  *   key      the setting the switch writes, and the name of the group
+ *   section  its name in the list on the left
  *   title    the fieldset's heading
  *   boxLabel what the switch itself says
  *   note     a sentence under the group, or nothing
@@ -695,6 +689,7 @@ Deluge.TrackerSettingsWindow.isNumber = function (xtype) {
 Deluge.TrackerSettingsWindow.RULES = [
     {
         key: 'auto_limit',
+        section: _('Limits'),
         title: _('Limit these torrents'),
         boxLabel: _('Hold them to these limits'),
         note: _(
@@ -753,6 +748,7 @@ Deluge.TrackerSettingsWindow.RULES = [
     },
     {
         key: 'auto_label',
+        section: _('Label'),
         title: _('Label these torrents'),
         boxLabel: _('Put them in a label'),
         note: _(
@@ -793,6 +789,7 @@ Deluge.TrackerSettingsWindow.RULES = [
     },
     {
         key: 'auto_move',
+        section: _('Move'),
         title: _('Move finished torrents'),
         boxLabel: _('Move their files somewhere else'),
         note: _(
@@ -817,6 +814,7 @@ Deluge.TrackerSettingsWindow.RULES = [
     },
     {
         key: 'auto_remove',
+        section: _('Remove finished'),
         title: _('Remove finished torrents'),
         boxLabel: _('Remove them after a while'),
         note: _(
@@ -843,6 +841,7 @@ Deluge.TrackerSettingsWindow.RULES = [
     },
     {
         key: 'remove_when_down',
+        section: _('Tracker down'),
         title: _('Remove downloads when the tracker is down'),
         boxLabel: _('Remove unfinished downloads, with their files'),
         note: _(
@@ -857,5 +856,15 @@ Deluge.TrackerSettingsWindow.RULES = [
                 value: 24,
             },
         ],
+    },
+    {
+        key: 'block',
+        section: _('Block'),
+        title: _('Block this tracker'),
+        boxLabel: _('Refuse its torrents'),
+        note: _(
+            'Each torrent announcing here is put on the banned list and held: paused, in error, and nothing deleted. The *arr of its label is told if it is set up to be. Lifting this does not unban what was already banned; that is done in Tools, Banned Torrents.'
+        ),
+        fields: [],
     },
 ];

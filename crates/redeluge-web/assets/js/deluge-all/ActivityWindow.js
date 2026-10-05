@@ -184,6 +184,7 @@ Deluge.ActivityWindow = Ext.extend(Ext.Window, {
             schedule: _('Schedule'),
             ratio: _('Ratio'),
             feed: _('Feed'),
+            blocklist: _('Blocklist'),
         };
         return names[value] || Ext.util.Format.htmlEncode(value);
     },
@@ -200,6 +201,8 @@ Deluge.ActivityWindow = Ext.extend(Ext.Window, {
             added: _('Added'),
             down: _('Down'),
             up: _('Up'),
+            blocked: _('Blocked'),
+            reported: _('Reported'),
         };
         return names[value] || Ext.util.Format.htmlEncode(value);
     },

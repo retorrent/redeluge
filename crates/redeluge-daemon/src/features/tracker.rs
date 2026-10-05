@@ -92,6 +92,13 @@ pub struct Options {
     #[serde(default = "a_day")]
     pub remove_down_hours: f64,
 
+    // -------------------------------------------------------------- blocking
+    /// Refuse this tracker's torrents: each is put on the banned list and
+    /// held, paused and in error, rather than downloaded. Nothing is deleted.
+    /// See `banned.rs`.
+    #[serde(default)]
+    pub block: bool,
+
     // ---------------------------------------------------------------- moving
     /// Move the files once the torrent has finished and its delay is up.
     #[serde(default)]
@@ -176,6 +183,7 @@ impl Default for Options {
             remove_data: false,
             remove_when_down: false,
             remove_down_hours: 24.0,
+            block: false,
             auto_move: false,
             move_path: String::new(),
             move_after_hours: 0.0,
@@ -208,6 +216,7 @@ impl Options {
             remove_data: self.remove_data,
             remove_when_down: self.remove_when_down,
             remove_down_hours: hours(self.remove_down_hours),
+            block: self.block,
             auto_move: self.auto_move,
             move_path: self.move_path.trim().to_owned(),
             move_after_hours: hours(self.move_after_hours),
@@ -232,7 +241,12 @@ impl Options {
     /// labelling with no label are both entries somebody started and did not
     /// finish, and neither should cost a sweep of the library.
     pub fn acts(&self) -> bool {
-        self.removes() || self.remove_when_down || self.moves() || self.labels() || self.limits()
+        self.removes()
+            || self.remove_when_down
+            || self.block
+            || self.moves()
+            || self.labels()
+            || self.limits()
     }
 
     pub fn removes(&self) -> bool {
@@ -350,6 +364,15 @@ impl Settings {
                 .map(|(host, options)| (host.clone(), options.sane()))
                 .collect(),
         }
+    }
+
+    /// The trackers whose torrents are refused.
+    pub fn blocked(&self) -> std::collections::BTreeSet<String> {
+        self.trackers
+            .iter()
+            .filter(|(_, options)| options.block)
+            .map(|(host, _)| host.clone())
+            .collect()
     }
 
     pub fn options(&self, host: &str) -> Option<&Options> {

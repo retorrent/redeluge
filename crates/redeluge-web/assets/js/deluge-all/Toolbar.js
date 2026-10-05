@@ -108,6 +108,13 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                                     scope: this,
                                 },
                                 {
+                                    // What is refused, and why.
+                                    text: _('Banned Torrents'),
+                                    iconCls: 'icon-banned',
+                                    handler: this.onBannedClick,
+                                    scope: this,
+                                },
+                                {
                                     // What is on disk that no torrent
                                     // accounts for.
                                     text: _('Cleanup'),
@@ -272,6 +279,13 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
             deluge.peersWindow = new Deluge.PeersWindow();
         }
         deluge.peersWindow.show();
+    },
+
+    onBannedClick: function () {
+        if (!deluge.bannedWindow) {
+            deluge.bannedWindow = new Deluge.BannedWindow();
+        }
+        deluge.bannedWindow.show();
     },
 
     onCleanupClick: function () {

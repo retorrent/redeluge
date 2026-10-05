@@ -36,6 +36,7 @@ pub mod rule {
     pub const SCHEDULE: &str = "schedule";
     pub const RATIO: &str = "ratio";
     pub const FEED: &str = "feed";
+    pub const BLOCKLIST: &str = "blocklist";
 }
 
 /// What it did. Also short, and also read by the interface.
@@ -50,6 +51,8 @@ pub mod did {
     pub const ADDED: &str = "added";
     pub const WENT_DOWN: &str = "down";
     pub const CAME_UP: &str = "up";
+    pub const BLOCKED: &str = "blocked";
+    pub const REPORTED: &str = "reported";
 }
 
 /// One thing the daemon did on its own.

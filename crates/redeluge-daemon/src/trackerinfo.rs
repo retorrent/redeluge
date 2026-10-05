@@ -378,12 +378,22 @@ impl Changes {
         now: f64,
     ) -> (Vec<(String, bool)>, bool) {
         let mut flipped = Vec::new();
-        let mut changed = false;
+        // A domain with no torrents any more has no state to keep: left in,
+        // its last "down" would outlive it and greet the next torrent from it
+        // as a tracker that has been down for weeks.
+        let before = self.0.len();
+        self.0.retain(|host, _| health.contains_key(host));
+        let mut changed = self.0.len() != before;
         for (host, totals) in health {
-            let up = match totals.health() {
-                "ok" => true,
-                "down" => false,
-                _ => continue,
+            // Up as soon as anything gets through, which is what the sidebar's
+            // `warning` with a working announce is; down only when nothing
+            // does. Anything else says nothing either way.
+            let up = if totals.working > 0 {
+                true
+            } else if totals.health() == "down" {
+                false
+            } else {
+                continue;
             };
             match self.0.get(host) {
                 Some(change) if change.up == up => {}
@@ -483,6 +493,27 @@ mod tests {
         );
         assert_eq!(changes.down_since(&host), None);
         assert_eq!(changes.get(&host).map(|change| change.since), Some(500.0));
+
+        // One announce working among failing ones is up, not down.
+        let mixed = vec![
+            row(
+                "https://t.example/announce",
+                vec![entry("https://t.example/announce", 3, false)],
+            ),
+            row(
+                "https://t.example/announce",
+                vec![entry("https://t.example/announce", 0, true)],
+            ),
+        ];
+        assert!(changes.observe(&by_domain(&mixed), 600.0).0.is_empty());
+        assert_eq!(changes.down_since(&host), None);
+
+        // Gone from the library: forgotten, so a stale "down" cannot greet the
+        // next torrent from it.
+        assert!(changes.observe(&by_domain(&down), 700.0).0.len() == 1);
+        let (_, changed) = changes.observe(&BTreeMap::new(), 800.0);
+        assert!(changed);
+        assert_eq!(changes.get(&host), None);
     }
 
     fn int(value: &Value, key: &str) -> i64 {

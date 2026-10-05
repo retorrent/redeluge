@@ -130,7 +130,7 @@ fn first_time(subject: &str, detail: &str) -> bool {
 }
 
 /// Seconds since the Unix epoch, as the configuration stores them.
-fn now() -> f64 {
+pub(crate) fn now() -> f64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since| since.as_secs_f64())
@@ -948,6 +948,9 @@ async fn apply_tracker_rules(core: Arc<Core>) {
         // the info window shows it, and a rule turned on later has to find a
         // tracker that has been down for a day already counted as such.
         note_tracker_changes(&core).await;
+        // Banned torrents and blocked trackers, whether or not any other
+        // rule is set.
+        enforce_blocklist(&core).await;
 
         let settings =
             tracker::Settings::from_config(setting(&core, "tracker").await.as_ref()).sane();
@@ -1054,6 +1057,39 @@ async fn apply_tracker_rules(core: Arc<Core>) {
         for removal in work.removals {
             remove_for_tracker(&core, &removal, now).await;
         }
+    }
+}
+
+/// Holds what is banned or announces to a blocked tracker, and tells the *arr
+/// instances that are due to hear about it. See `banned.rs`.
+async fn enforce_blocklist(core: &Core) {
+    let blocked = tracker::Settings::from_config(setting(core, "tracker").await.as_ref()).blocked();
+    let at = now();
+    let found = core
+        .manager
+        .with(move |state| {
+            // Nothing banned and nothing blocked is the normal case, and what
+            // is behind it is a status sweep of the whole library.
+            if blocked.is_empty() && state.banned.torrents.is_empty() {
+                return crate::banned::Found::default();
+            }
+            let arr = state.arr.clone();
+            crate::banned::enforce(state, &blocked, &|label| arr.sends(label), at)
+        })
+        .await
+        .unwrap_or_default();
+
+    for (hash, name, reason) in found.held {
+        tracing::info!(torrent = %hash, %reason, "held: it is banned");
+        record(
+            core,
+            Action::new(rule::BLOCKLIST, did::BLOCKED, at)
+                .torrent(&hash, &name)
+                .detail(reason),
+        );
+    }
+    for (hash, _label) in found.to_send {
+        let _ = core.tell_arr(&hash, true).await;
     }
 }
 
@@ -1178,7 +1214,14 @@ fn decide_tracker_work(
 
     for status in state.session.all_torrent_status() {
         work.moving_now |= status.moving_storage;
-        if !state.torrents.contains_key(&status.info_hash) {
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
+        // Asked for and not yet reported by libtorrent still counts as moving.
+        work.moving_now |= torrent.moving_to.is_some();
+        // A banned torrent is held, and the promise is that nothing deletes
+        // it: no rule of a tracker's touches it until the ban is lifted.
+        if state.banned.contains(&status.info_hash) {
             continue;
         }
 
@@ -1303,7 +1346,16 @@ fn decide_tracker_work(
             && state
                 .tracker_changes
                 .down_since(&host)
-                .is_some_and(|since| tracker::due(since, now, options.remove_down_hours))
+                // From when it went down or when this torrent arrived,
+                // whichever is later: a torrent added to a dead tracker gets
+                // the whole wait, not what is left of somebody else's.
+                .is_some_and(|since| {
+                    tracker::due(
+                        since.max(status.added_time as f64),
+                        now,
+                        options.remove_down_hours,
+                    )
+                })
         {
             if labels.never_removes(&torrent.options.label) {
                 tracing::debug!(torrent = %id, label = %torrent.options.label,

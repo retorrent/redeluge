@@ -288,6 +288,45 @@ the clock again. A paused tracker, or one with a stale announce, does not move
 the clock either way. The info window shows the date, and the Activity window
 gets a line each time a tracker goes down or comes back.
 
+## Banned torrents and blocked trackers
+
+Two ways to refuse a torrent, neither of which deletes anything on its own:
+
+* **Blocklist** on a torrent's menu bans it, tells the *arr of its label (see
+  below) and then removes it with its files. That is you deleting it.
+* **Block this tracker** in a tracker's settings (`"block": true`) bans every
+  torrent announcing there. They are held, not deleted.
+
+A banned torrent is held: paused, out of the queue, and in `Error` with the
+message `Blocked: <why>`, which is the state every client already shows (an
+*arr sees it as a warning). Resume is refused while it is banned, and a banned
+hash added again is held the moment it arrives. The list lives in
+`banned.json` beside `core.conf` and keeps when each was banned, its name once
+the metadata is known, its tracker and label, and what the *arr said. Tools,
+Banned Torrents shows it, sends entries to the *arr on demand, and unbans.
+
+### Telling *arr software
+
+Set in a label's settings, because the label is the *arr's category: the
+address, the API key, and *Send banned torrents to its blocklist*. The key is
+kept in `arr.json` (mode 600), never in `core.conf`, and is never read back;
+setting it or using Test needs an admin account.
+
+Telling an *arr is `GET /api/v3/queue/details` to find the download by its
+hash, then `DELETE /api/v3/queue/{id}?removeFromClient=false&blocklist=true&skipRedownload=false`:
+the release goes on its blocklist and it looks for another. With the switch
+on, that happens at the next sweep (about a minute), retried for ten minutes
+while the *arr has not noticed the download yet. With it off, nothing is sent
+until somebody presses Send to *arr.
+
+| RPC | |
+|---|---|
+| `redeluge.ban_torrents(ids, reason, delete=true)` | Ban, tell the *arr if its label sends, then remove with files unless `delete` is false (then held) |
+| `redeluge.get_banned()` | The list |
+| `redeluge.send_banned(ids)` | Tell the *arr now |
+| `redeluge.unban_torrents(ids)` | Lift; a torrent still present stays paused |
+| `redeluge.get_arr(label)`, `redeluge.set_arr(label, {url, api_key, send_blocklist})`, `redeluge.test_arr(label, {...})` | A label's *arr. An empty key keeps the stored one |
+
 ### What "finished" means, and the one case it does not cover
 
 Every wait is measured from the moment the download finished, which is the time

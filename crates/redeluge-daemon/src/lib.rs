@@ -11,7 +11,9 @@
 //! authorisation level.
 
 pub mod activity;
+pub mod arr;
 pub mod auth;
+pub mod banned;
 pub mod cleanup;
 pub mod config;
 pub mod core;

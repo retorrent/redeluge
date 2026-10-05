@@ -75,6 +75,10 @@ pub struct SessionState {
     /// When each tracker domain last went up or down. Saved: see
     /// `trackerinfo::Changes`.
     pub tracker_changes: crate::trackerinfo::Changes,
+    /// Torrents that are not to be downloaded. See `banned.rs`.
+    pub banned: crate::banned::Banned,
+    /// Which *arr instance each label reports to. See `arr.rs`.
+    pub arr: crate::arr::Settings,
     /// The first tracker each torrent lists, for the fallback below.
     ///
     /// Only the first, and only its URL: that is all the fallback reads. The
@@ -456,6 +460,8 @@ impl Manager {
             paused_by_session: std::collections::BTreeSet::new(),
             tracker_limits: BTreeMap::new(),
             tracker_changes: crate::trackerinfo::Changes::load(&config_dir),
+            banned: crate::banned::Banned::load(&config_dir),
+            arr: crate::arr::Settings::load(&config_dir),
             first_tracker: BTreeMap::new(),
             progress_marks: BTreeMap::new(),
             activity: std::sync::Arc::clone(&activity),

@@ -25,22 +25,10 @@ Ext.ns('Deluge');
 
 /**
  * @class Deluge.LabelSettingsWindow
- * @extends Ext.Window
+ * @extends Deluge.SectionedWindow
  */
-Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
+Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
     title: _('Label Settings'),
-    width: 470,
-    // Tall enough for the boxes without scrolling, which is the whole point of
-    // separating them: a group you have to scroll to find is a group you did
-    // not know was there. It scrolls anyway on a short screen.
-    height: 660,
-    layout: 'fit',
-    buttonAlign: 'right',
-    closeAction: 'hide',
-    constrainHeader: true,
-    plain: true,
-    minWidth: 360,
-    minHeight: 280,
 
     initComponent: function () {
         Deluge.LabelSettingsWindow.superclass.initComponent.call(this);
@@ -52,20 +40,16 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
         this.addButton(_('Cancel'), this.onCancel, this);
         this.addButton(_('OK'), this.onOk, this);
 
-        this.form = this.add({
-            xtype: 'form',
-            border: false,
-            autoScroll: true,
-            bodyStyle: 'padding: 5px',
-            labelWidth: 170,
-        });
-
         this.fields = {};
 
         // A box per group rather than three switches in one column. Which four
         // fields a switch governs was a matter of counting indents before, and
         // the window is mostly fields.
-        var bandwidth = this.group('apply_max', _('Bandwidth limits'));
+        var bandwidth = this.group(
+            'apply_max',
+            _('Bandwidth limits'),
+            _('Bandwidth')
+        );
         this.fields.max_download_speed = bandwidth.add(
             this.spinner(_('Maximum download (KiB/s):'), 1)
         );
@@ -79,7 +63,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             this.spinner(_('Maximum upload slots:'), 0)
         );
 
-        var seeding = this.group('apply_queue', _('Seeding rules'));
+        var seeding = this.group('apply_queue', _('Seeding rules'), _('Seeding'));
         this.fields.stop_at_ratio = seeding.add({
             xtype: 'checkbox',
             hideLabel: true,
@@ -92,7 +76,11 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             boxLabel: _('Remove the torrent at that ratio'),
         });
 
-        var move = this.group('apply_move_completed', _('Move on completion'));
+        var move = this.group(
+            'apply_move_completed',
+            _('Move on completion'),
+            _('Move')
+        );
         this.fields.move_completed_path = move.add({
             xtype: 'textfield',
             fieldLabel: _('Move to:'),
@@ -100,7 +88,11 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             width: 220,
         });
 
-        var stuck = this.group('apply_stuck', _('Downloads that never start'));
+        var stuck = this.group(
+            'apply_stuck',
+            _('Downloads that never start'),
+            _('Stalled')
+        );
         this.fields.stuck_hours = stuck.add({
             xtype: 'durationfield',
             fieldLabel: _('Nothing arriving for:'),
@@ -165,7 +157,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
         // Not a group either: it governs nothing, it refuses. A switch with
         // fields under it would suggest there is something to configure, and
         // there is not — the whole setting is the one line.
-        var keep = this.form.add({
+        var keep = this.addSection(_('Removal')).add({
             xtype: 'fieldset',
             cls: 'x-deluge-option-group',
             title: _('Removal'),
@@ -188,7 +180,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
         // The last box is not a group: it has no switch, because it is the
         // one option here that does nothing to the torrents. It decides what
         // the list shows, so it says so in a legend rather than in a switch.
-        var view = this.form.add({
+        var view = this.addSection(_('Torrent list')).add({
             xtype: 'fieldset',
             cls: 'x-deluge-option-group',
             title: _('In the torrent list'),
@@ -207,6 +199,88 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
             ),
             style: 'display: block; margin: 2px 0 0 0; opacity: 0.72;',
         });
+
+        // The *arr that uses this label as its category. Not label options:
+        // the key is a secret, so it is stored apart and never read back
+        // (`redeluge.get_arr` only says whether there is one).
+        var arr = this.addSection(_('*arr software')).add({
+            xtype: 'fieldset',
+            cls: 'x-deluge-option-group',
+            title: _('*arr software'),
+            autoHeight: true,
+            labelWidth: 170,
+        });
+        this.arr = {
+            url: arr.add({
+                xtype: 'textfield',
+                fieldLabel: _('Address:'),
+                labelSeparator: '',
+                width: 220,
+                emptyText: 'http://host:port',
+            }),
+            api_key: arr.add({
+                xtype: 'textfield',
+                inputType: 'password',
+                fieldLabel: _('API key:'),
+                labelSeparator: '',
+                width: 220,
+            }),
+            keyNote: arr.add({
+                xtype: 'label',
+                text: '',
+                style: 'display: block; margin: 0 0 4px 175px; opacity: 0.72;',
+            }),
+            send_blocklist: arr.add({
+                xtype: 'checkbox',
+                hideLabel: true,
+                boxLabel: _('Send banned torrents to its blocklist'),
+            }),
+        };
+        arr.add({
+            xtype: 'button',
+            text: _('Test'),
+            handler: this.onTestArr,
+            scope: this,
+        });
+        arr.add({
+            xtype: 'label',
+            text: _(
+                'A banned torrent of this label is taken out of its queue and put on its blocklist, and it looks for another release. Without the switch, use Send to *arr in Tools, Banned Torrents. Saving needs an admin account.'
+            ),
+            style: 'display: block; margin: 4px 0 0 0; opacity: 0.72;',
+        });
+    },
+
+    /** What the *arr box asks for. A blank key keeps the stored one. */
+    arrOptions: function () {
+        return {
+            url: this.arr.url.getValue() || '',
+            api_key: this.arr.api_key.getValue() || '',
+            send_blocklist: this.arr.send_blocklist.getValue() === true,
+        };
+    },
+
+    onTestArr: function () {
+        deluge.client.redeluge.test_arr(this.label, this.arrOptions(), {
+            success: function (who) {
+                Ext.MessageBox.alert(
+                    _('*arr software'),
+                    Ext.util.Format.htmlEncode(
+                        String.format(_('Reached {0}.'), who)
+                    )
+                );
+            },
+            failure: function (response) {
+                var error = response && response.error;
+                Ext.MessageBox.alert(
+                    _('*arr software'),
+                    Ext.util.Format.htmlEncode(
+                        (error && error.message) || _('Could not reach it.')
+                    )
+                );
+            },
+            scope: this,
+        });
     },
 
     /**
@@ -217,8 +291,8 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
      * is not a group of zeroes, it is a group this label does not touch, and
      * `onSwitched` greys it whole.
      */
-    group: function (key, caption) {
-        var set = this.form.add({
+    group: function (key, caption, section) {
+        var set = this.addSection(section).add({
             xtype: 'fieldset',
             cls: 'x-deluge-option-group',
             autoHeight: true,
@@ -265,6 +339,32 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
         // label's settings sitting there looking like this one's.
         this.setOptions({});
         this.load();
+        this.loadArr();
+    },
+
+    loadArr: function () {
+        var name = this.label;
+        this.arrLoaded = null;
+        this.arr.url.setValue('');
+        this.arr.api_key.setValue('');
+        this.arr.keyNote.setText('');
+        this.arr.send_blocklist.setValue(false);
+        deluge.client.redeluge.get_arr(name, {
+            success: function (target) {
+                if (!this.isVisible() || this.label !== name) return;
+                this.arrLoaded = target;
+                this.arr.url.setValue(target['url'] || '');
+                this.arr.keyNote.setText(
+                    target['has_key']
+                        ? _('A key is stored. Leave this blank to keep it.')
+                        : ''
+                );
+                this.arr.send_blocklist.setValue(
+                    target['send_blocklist'] === true
+                );
+            },
+            scope: this,
+        });
     },
 
     load: function () {
@@ -392,6 +492,25 @@ Deluge.LabelSettingsWindow = Ext.extend(Ext.Window, {
                 name,
                 options['hide_by_default'] === true
             );
+        }
+
+        // Only when something changed: saving it takes an admin account,
+        // and a normal one pressing OK on the rest should not be refused.
+        var arr = this.arrOptions();
+        var before = this.arrLoaded || {};
+        if (
+            arr.api_key ||
+            arr.url !== (before['url'] || '') ||
+            arr.send_blocklist !== (before['send_blocklist'] === true)
+        ) {
+            deluge.client.redeluge.set_arr(name, arr, {
+                failure: function () {
+                    Ext.MessageBox.alert(
+                        _('*arr software'),
+                        _('The daemon did not take the *arr settings.')
+                    );
+                },
+            });
         }
 
         deluge.client.label.set_options(name, options, {
