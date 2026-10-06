@@ -94,7 +94,8 @@ pub struct Options {
 
     // -------------------------------------------------------------- blocking
     /// Refuse this tracker's torrents: each is put on the banned list and
-    /// held, paused and in error, rather than downloaded. Nothing is deleted.
+    /// removed once its *arr has been told, with its files if it had not
+    /// finished.
     /// See `banned.rs`.
     #[serde(default)]
     pub block: bool,

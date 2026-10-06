@@ -7,8 +7,8 @@
  *
  * Two ways onto the list: Blocklist on a torrent's menu, which bans it, tells
  * the *arr of its label and deletes it with its files; and a tracker blocked
- * in its settings, whose torrents are held, paused and in error, and nothing
- * deleted. The list keeps when each was banned and its name once known, and
+ * in its settings, whose torrents are banned, reported and removed. Adding a
+ * banned torrent again is refused. The list keeps when each was banned and its name once known, and
  * what the *arr said. `redeluge.get_banned` and friends; see `banned.rs`.
  */
 Ext.ns('Deluge');
@@ -186,7 +186,7 @@ Deluge.BannedWindow.ban = function (ids) {
         _('Blocklist'),
         String.format(
             _(
-                'Ban {0} torrent(s)? They are deleted with their files, the *arr of their label is told if it is set up to be, and they are held if they are ever added again.'
+                'Ban {0} torrent(s)? The *arr of their label is told if it is set up to be, they are removed with their files, and adding them again is refused.'
             ),
             ids.length
         ),

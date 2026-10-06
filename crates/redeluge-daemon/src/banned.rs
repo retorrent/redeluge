@@ -3,13 +3,14 @@
 //!
 //! Two ways onto the list: somebody bans a torrent, or it announces to a
 //! tracker that has been blocked in its tracker settings. Either way the
-//! torrent is held rather than deleted: paused, and in error with a message
-//! that says why, which is the one state every client already shows. Only a
-//! ban somebody asks for by hand deletes anything, and that is them deleting.
+//! torrent is held — paused, in error with a message saying why — only for as
+//! long as its *arr takes to be told, then removed: with its files if it had
+//! not finished, which is partial files nobody will finish. Added again, it is
+//! refused outright, and the client that sent it is told so.
 //!
 //! The list outlives the torrents on it. It is the record of what was refused
-//! and when, it is how a banned torrent added again is held the moment it
-//! arrives, and it remembers what the *arr instance was told.
+//! and when, it is how a banned torrent added again is recognised, and it
+//! remembers what the *arr instance was told.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -245,6 +246,54 @@ pub fn enforce(
         }
     }
     found
+}
+
+/// The banned torrents still in the session whose *arr has had its answer (or
+/// has none to give), so nothing is left to keep them for: hash, name, and
+/// whether their files go with them. An unfinished download is partial files
+/// nobody will finish; a finished one keeps its files.
+pub fn due_to_drop(state: &SessionState) -> Vec<(String, String, bool)> {
+    use redeluge_libtorrent::TorrentState as Lt;
+    state
+        .banned
+        .torrents
+        .iter()
+        .filter(|(hash, entry)| {
+            entry.arr.state != ArrState::Pending && state.torrents.contains_key(*hash)
+        })
+        .filter_map(|(hash, entry)| {
+            let status = state.session.torrent_status(hash).ok()?;
+            // Not while its files are being checked: until the check is done a
+            // complete download does not look finished, and would lose files
+            // it has every right to keep. The next pass looks again.
+            if matches!(
+                status.state,
+                Lt::CheckingFiles | Lt::CheckingResumeData | Lt::Other(_)
+            ) {
+                return None;
+            }
+            Some((hash.clone(), entry.name.clone(), !status.is_finished))
+        })
+        .collect()
+}
+
+/// A banned torrent sent again and taken in to be reported: held from the
+/// first moment, and its entry set to tell the *arr afresh, which then puts
+/// this attempt on its blocklist too. The sweep removes it once that is done.
+pub fn returned(state: &mut SessionState, hash: &str, reason: &str) {
+    if let Some(torrent) = state.torrents.get_mut(hash) {
+        torrent.forced_error = Some(held_message(reason));
+    }
+    hold(state, hash);
+    if let Some(entry) = state.banned.torrents.get_mut(hash) {
+        entry.arr = Arr {
+            state: ArrState::Pending,
+            ..Arr::default()
+        };
+    }
+    if let Err(err) = state.banned.save(&state.config_dir) {
+        tracing::warn!(error = %err, "could not save the banned torrents");
+    }
 }
 
 /// Pauses a torrent and takes it out of the queue's hands, as pausing it by

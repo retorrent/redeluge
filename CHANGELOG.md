@@ -8,6 +8,37 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.9.1] — 2026-10-06
+
+### Added
+
+- **What to do with a banned torrent sent again,** per label, next to its *arr
+  settings: refuse it (the default), or hold it paused and report it to the
+  *arr, so that this attempt goes on its blocklist too and it looks for
+  another release; it is then removed. Refusing keeps anything from
+  downloading, but the *arr only sees an add that failed and may try the same
+  release again. (`report_returns` in `redeluge.set_arr` / `get_arr`.)
+
+### Fixed
+
+- **A banned torrent was held in `Error` and never removed, and adding it
+  again only held it.** Banning now removes it: once its label's *arr has been
+  told, or straight away when there is none, with its files unless it had
+  finished. A banned hash added again is refused — the add fails with
+  `AddTorrentError: this torrent is banned` and nothing is downloaded. The
+  client does this itself, because an *arr's blocklist does not always
+  recognise the same release sent again (an entry it stores without the info
+  hash is matched on title, indexer and date). Torrents of a blocked tracker
+  are banned and removed the same way.
+- `redeluge.ban_torrents` with `delete` false now removes the torrent and keeps
+  its files, rather than holding it.
+- A banned torrent is never removed while its files are being checked: until
+  the check ends a complete download does not look finished, and would have
+  lost files it keeps.
+- A banned `.torrent` or `.magnet` dropped into a watched folder is refused
+  once and set aside like an added file, rather than refused again on every
+  scan.
+
 ## [1.9.0] — 2026-10-05
 
 ### Added

@@ -350,7 +350,7 @@ Deluge.TrackerSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
         if (options['block']) {
             lines.push(
                 String.format(
-                    _('All {0} would be banned and held, nothing deleted.'),
+                    _('All {0} would be banned and removed; unfinished ones with their files.'),
                     this.torrents.length
                 )
             );
@@ -863,7 +863,7 @@ Deluge.TrackerSettingsWindow.RULES = [
         title: _('Block this tracker'),
         boxLabel: _('Refuse its torrents'),
         note: _(
-            'Each torrent announcing here is put on the banned list and held: paused, in error, and nothing deleted. The *arr of its label is told if it is set up to be. Lifting this does not unban what was already banned; that is done in Tools, Banned Torrents.'
+            'Each torrent announcing here is banned: the *arr of its label is told if it is set up to be, then it is removed, with its files if it had not finished. Adding it again is refused. Lifting this does not unban what was already banned; that is done in Tools, Banned Torrents.'
         ),
         fields: [],
     },

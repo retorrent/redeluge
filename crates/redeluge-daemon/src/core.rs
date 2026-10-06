@@ -622,6 +622,26 @@ impl Core {
 
                 let id = state.session.add_torrent(&request)?;
 
+                // Banned. Refused unless the *arr of the label it was banned
+                // under asks to hear about returns: then it is taken in, held,
+                // and reported like a new ban below. Refused means taken
+                // straight back out with its files left alone: nothing was
+                // downloaded, and a torrent added over files already on disk
+                // must not cost them.
+                let mut returned = None;
+                if let Some(entry) = state.banned.torrents.get(&id) {
+                    let reports = state
+                        .arr
+                        .target(&entry.label)
+                        .is_some_and(|target| target.report_returns);
+                    if !reports {
+                        let reason = entry.reason.clone();
+                        let _ = state.session.remove_torrent(&id, false);
+                        return Ok(Err(reason));
+                    }
+                    returned = Some(entry.reason.clone());
+                }
+
                 if !torrent_file.is_empty() {
                     let path = crate::manager::torrent_file_path(&state.state_dir(), &id);
                     if let Err(err) = std::fs::create_dir_all(state.state_dir())
@@ -653,19 +673,17 @@ impl Core {
                 state
                     .torrents
                     .insert(id.clone(), Torrent::new(id.clone(), stored));
-                // Banned already: held from the first moment rather than at
-                // the next sweep, which would let it download for a minute.
-                // The sweep fills in why.
-                if state.banned.contains(&id) {
-                    crate::banned::hold(state, &id);
+                if let Some(reason) = returned {
+                    crate::banned::returned(state, &id, &reason);
                 }
                 state.mark_dirty();
                 let _ = state.save_state();
-                Ok::<String, redeluge_libtorrent::Error>(id)
+                Ok::<Result<String, String>, redeluge_libtorrent::Error>(Ok(id))
             })
             .await
             .map_err(|err| RpcError::invalid_argument(err.to_string()))?
-            .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
+            .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+            .map_err(|reason| RpcError::new("AddTorrentError", format!("{BANNED}{reason}")))?;
 
         self.manager.announce(Event::TorrentAdded {
             torrent_id: id.clone(),
@@ -1457,8 +1475,8 @@ impl Rpc for Core {
                                     // somebody's decision now.
                                     entry.reason = reason.clone();
                                 }
-                                // Held now rather than at the next sweep, for
-                                // a ban that does not delete it.
+                                // Held until it is removed below, so it does
+                                // not download while the *arr is asked.
                                 if let Some(torrent) = state.torrents.get_mut(&id) {
                                     torrent.forced_error =
                                         Some(crate::banned::held_message(&reason));
@@ -1477,7 +1495,7 @@ impl Rpc for Core {
                     } else {
                         None
                     };
-                    let removed = present && delete && self.remove_one(&id, true).await.is_ok();
+                    let removed = present && self.remove_one(&id, delete).await.is_ok();
                     let mut pairs = vec![
                         (Value::Str("id".into()), Value::Str(id)),
                         (Value::Str("removed".into()), Value::Bool(removed)),
@@ -1530,6 +1548,10 @@ impl Rpc for Core {
                         Value::Str("send_blocklist".into()),
                         Value::Bool(target.send_blocklist),
                     ),
+                    (
+                        Value::Str("report_returns".into()),
+                        Value::Bool(target.report_returns),
+                    ),
                 ]))
             }
             // An empty key keeps the stored one; an empty address forgets
@@ -1550,6 +1572,10 @@ impl Rpc for Core {
                     api_key: text("api_key"),
                     send_blocklist: given
                         .get("send_blocklist")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    report_returns: given
+                        .get("report_returns")
                         .and_then(Value::as_bool)
                         .unwrap_or(false),
                 };
@@ -2651,6 +2677,14 @@ fn list_directory(path: &str) -> Value {
         ),
         (Value::Str("entries".into()), Value::List(directories)),
     ])
+}
+
+/// How an add refused for a ban begins, which is what lets a watched
+/// directory tell it from a failure worth trying again.
+const BANNED: &str = "this torrent is banned: ";
+
+pub(crate) fn is_banned_refusal(err: &RpcError) -> bool {
+    err.exception == "AddTorrentError" && err.message.starts_with(BANNED)
 }
 
 /// One banned torrent, as `redeluge.get_banned` answers it.

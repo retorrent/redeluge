@@ -37,6 +37,13 @@ pub struct Target {
     /// is blocked. Off: a blocked torrent waits for somebody to press Send.
     #[serde(default)]
     pub send_blocklist: bool,
+    /// What to do when a banned torrent of this label is sent again. Off,
+    /// the default: refused, so nothing downloads but the instance only sees
+    /// an add that failed and may try the same release again. On: taken in
+    /// paused, reported like a new ban so this attempt goes on the instance's
+    /// blocklist too and it looks for another, then removed.
+    #[serde(default)]
+    pub report_returns: bool,
 }
 
 impl Target {
@@ -239,6 +246,7 @@ mod tests {
             url: format!("{url}/"),
             api_key: key.into(),
             send_blocklist: true,
+            report_returns: false,
         }
     }
 

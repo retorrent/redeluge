@@ -235,6 +235,28 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
                 hideLabel: true,
                 boxLabel: _('Send banned torrents to its blocklist'),
             }),
+            // Up to the user: refusing is the quiet answer, reporting is the
+            // one that makes the *arr move on to another release.
+            report_returns: arr.add({
+                xtype: 'combo',
+                fieldLabel: _('Banned, sent again:'),
+                labelSeparator: '',
+                width: 220,
+                mode: 'local',
+                triggerAction: 'all',
+                editable: false,
+                valueField: 'id',
+                displayField: 'text',
+                value: 'refuse',
+                store: new Ext.data.ArrayStore({
+                    idIndex: 0,
+                    fields: ['id', 'text'],
+                    data: [
+                        ['refuse', _('Refuse it')],
+                        ['report', _('Hold it and report it here')],
+                    ],
+                }),
+            }),
         };
         arr.add({
             xtype: 'button',
@@ -245,7 +267,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
         arr.add({
             xtype: 'label',
             text: _(
-                'A banned torrent of this label is taken out of its queue and put on its blocklist, and it looks for another release. Without the switch, use Send to *arr in Tools, Banned Torrents. Saving needs an admin account.'
+'A banned torrent of this label is taken out of its queue and put on its blocklist, and it looks for another release. Without the switch, use Send to *arr in Tools, Banned Torrents. A banned torrent sent again is either refused (nothing downloads, but the *arr may try the same release later) or held paused and reported, so this attempt goes on its blocklist too and it moves on, then removed. Saving needs an admin account.'
             ),
             style: 'display: block; margin: 4px 0 0 0; opacity: 0.72;',
         });
@@ -257,6 +279,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
             url: this.arr.url.getValue() || '',
             api_key: this.arr.api_key.getValue() || '',
             send_blocklist: this.arr.send_blocklist.getValue() === true,
+            report_returns: this.arr.report_returns.getValue() === 'report',
         };
     },
 
@@ -349,6 +372,7 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
         this.arr.api_key.setValue('');
         this.arr.keyNote.setText('');
         this.arr.send_blocklist.setValue(false);
+        this.arr.report_returns.setValue('refuse');
         deluge.client.redeluge.get_arr(name, {
             success: function (target) {
                 if (!this.isVisible() || this.label !== name) return;
@@ -361,6 +385,9 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
                 );
                 this.arr.send_blocklist.setValue(
                     target['send_blocklist'] === true
+                );
+                this.arr.report_returns.setValue(
+                    target['report_returns'] === true ? 'report' : 'refuse'
                 );
             },
             scope: this,
@@ -501,7 +528,8 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
         if (
             arr.api_key ||
             arr.url !== (before['url'] || '') ||
-            arr.send_blocklist !== (before['send_blocklist'] === true)
+            arr.send_blocklist !== (before['send_blocklist'] === true) ||
+            arr.report_returns !== (before['report_returns'] === true)
         ) {
             deluge.client.redeluge.set_arr(name, arr, {
                 failure: function () {

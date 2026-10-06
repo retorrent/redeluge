@@ -1091,6 +1091,34 @@ async fn enforce_blocklist(core: &Core) {
     for (hash, _label) in found.to_send {
         let _ = core.tell_arr(&hash, true).await;
     }
+
+    // Dropped once the *arr has been told, or straight away when there is
+    // nobody to tell: the *arr finds a download in its queue only while the
+    // client still has it, so it is told first.
+    let drops = core
+        .manager
+        .with(|state| crate::banned::due_to_drop(state))
+        .await
+        .unwrap_or_default();
+    for (hash, name, with_data) in drops {
+        match core.remove_one(&hash, with_data).await {
+            Ok(()) => {
+                tracing::info!(torrent = %hash, data = with_data, "removed: it is banned");
+                record(
+                    core,
+                    Action::new(rule::BLOCKLIST, did::REMOVED, at)
+                        .torrent(&hash, &name)
+                        .detail(if with_data {
+                            "banned, removed with its files"
+                        } else {
+                            "banned, removed; finished, so its files are kept"
+                        }),
+                );
+            }
+            Err(err) => tracing::warn!(torrent = %hash, error = %err.message,
+                "could not remove a banned torrent"),
+        }
+    }
 }
 
 /// Records which tracker domains went up or down since the last pass, saves
@@ -2614,6 +2642,13 @@ async fn add_torrent_file(core: &Core, directory: &autoadd::WatchDir, path: &Pat
             tracing::info!(path = %path.display(), "added from a watched directory");
             true
         }
+        // Refused for good, so dealt with: disposed of like an added file
+        // rather than left to be refused again on every scan.
+        Err(err) if crate::core::is_banned_refusal(&err) => {
+            tracing::info!(path = %path.display(), reason = %err.message,
+                "a watched directory had a banned torrent; not added");
+            true
+        }
         Err(err) => {
             tracing::warn!(path = %path.display(), error = %err.message,
                 "could not add a torrent from a watched directory");
@@ -2654,6 +2689,12 @@ async fn add_magnet_file(core: &Core, directory: &autoadd::WatchDir, path: &Path
             .await
         {
             Ok(_) => added += 1,
+            // Refused for good counts as dealt with, as for a torrent file.
+            Err(err) if crate::core::is_banned_refusal(&err) => {
+                added += 1;
+                tracing::info!(path = %path.display(), reason = %err.message,
+                    "a watched directory had a banned magnet; not added");
+            }
             Err(err) => tracing::warn!(path = %path.display(), error = %err.message,
                 "could not add a magnet from a watched directory"),
         }
