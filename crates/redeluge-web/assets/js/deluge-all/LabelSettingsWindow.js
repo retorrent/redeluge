@@ -108,6 +108,11 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
             ),
             style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });
+        this.fields.stuck_dead_only = stuck.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Only when the tracker says nobody has it (Dead)'),
+        });
         this.fields.stuck_action = stuck.add({
             xtype: 'combo',
             fieldLabel: _('Then:'),
@@ -593,6 +598,7 @@ Deluge.LabelSettingsWindow.GROUPS = {
         'stuck_action',
         'stuck_label',
         'stuck_remove_data',
+        'stuck_dead_only',
     ],
 };
 

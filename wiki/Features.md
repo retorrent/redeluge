@@ -117,13 +117,12 @@ two places, and the more specific one wins:
 
 | Where | Key | Covers |
 |---|---|---|
-| Preferences, Queue | `stuck` | Every torrent, unless its label says otherwise |
+| Preferences, Queue | `stuck` | Every torrent whose label has no rule of its own |
 | A label's settings | `apply_stuck` and friends | The torrents of that label |
 
-A label that has the rule **off** is an exemption, not a fall-through: its
-torrents are out of scope of the daemon's rule too. A label is how somebody
-says "these are different", and it would be a poor rule that ignored them
-saying it.
+A label that has the rule **off** falls through to the daemon's rule. The one
+exemption is **never remove** on the label: the rule pauses its torrents
+instead of removing them.
 
 A torrent in that state is not slow, it is dead — a magnet nobody is seeding, a
 `.torrent` for content that has left the swarm, a tracker that has stopped
@@ -138,7 +137,8 @@ Two numbers say when to act:
 | `hours` / `stuck_hours` | How long without a byte arriving |
 | `max_progress` / `stuck_max_progress` | How far along a torrent may be and still be taken, in per cent |
 | `action` / `stuck_action` | `pause` or `remove`. **Pause is the default**: the action that deletes has to be the one you chose, not the one you got by turning a rule on |
-| `label` / `stuck_label` | Where a paused torrent is filed. A label whose own rule is off is an exemption, so this is both how they stop being looked at every minute and how you find them again |
+| `label` / `stuck_label` | Where a paused torrent is filed, so you can find it again. A paused torrent is not looked at again |
+| `dead_only` / `stuck_dead_only` | Only take a torrent the tracker says nobody has: zero seeds and zero peers, the sidebar's *Dead* group. A tracker that has not answered yet does not count. Off by default |
 
 `max_progress` is zero by default, which means **only torrents that never
 started** — deleting one that is 90% done and stalled is a different decision

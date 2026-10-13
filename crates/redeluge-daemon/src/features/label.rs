@@ -105,6 +105,11 @@ pub struct Options {
     #[serde(default = "yes")]
     pub stuck_remove_data: bool,
 
+    /// Only take torrents the tracker says nobody has. See
+    /// [`super::stuck::Rule::dead_only`].
+    #[serde(default)]
+    pub stuck_dead_only: bool,
+
     /// Never let a rule of the daemon's take these torrents away.
     ///
     /// A label outranks a tracker. A tracker rule says what a tracker's terms
@@ -184,6 +189,7 @@ impl Default for Options {
             stuck_action: pause(),
             stuck_label: String::new(),
             stuck_remove_data: true,
+            stuck_dead_only: false,
             never_remove: false,
             hide_by_default: false,
             auto_add: false,
@@ -259,11 +265,11 @@ impl Options {
         self.apply_stuck
     }
 
-    /// This label's answer to the stuck rule: its own, or none.
+    /// This label's own stuck rule, if it has one.
     ///
-    /// `None` means the torrents of this label are exempt — including from the
-    /// daemon's own rule. A label is how somebody says "these are different",
-    /// and a rule that overrode them saying it would be a poor rule.
+    /// `None` means the daemon's rule applies to this label's torrents. The
+    /// way a label keeps them is `never_remove`, which the sweep turns into a
+    /// pause.
     pub fn stuck_rule(&self) -> Option<super::stuck::Rule> {
         self.apply_stuck.then(|| super::stuck::Rule {
             hours: self.stuck_hours,
@@ -271,6 +277,7 @@ impl Options {
             action: super::stuck::Action::parse(&self.stuck_action),
             label: crate::core::normalise_label(self.stuck_label.trim()),
             remove_data: self.stuck_remove_data,
+            dead_only: self.stuck_dead_only,
         })
     }
 }
@@ -511,10 +518,8 @@ mod tests {
     }
 
     #[test]
-    fn a_label_with_the_rule_off_is_an_exemption_not_a_gap() {
-        // `None` is read by the sweep as "these torrents are not the daemon's
-        // rule's business either". A label is how somebody says these are
-        // different, and this is that sentence in one value.
+    fn a_label_with_the_rule_off_has_no_rule_of_its_own() {
+        // `None` is read by the sweep as "the daemon's rule applies".
         assert!(Options::default().stuck_rule().is_none());
     }
 

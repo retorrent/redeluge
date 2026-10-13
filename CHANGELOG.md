@@ -8,6 +8,23 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [Unreleased]
+
+### Added
+
+- **The stuck rule can be limited to dead torrents.** *Only when the tracker
+  says nobody has it* (`dead_only`, or `stuck_dead_only` on a label) restricts
+  it to torrents in the *Dead* group: the tracker answered with zero seeds and
+  zero peers. With *Remove it* and *Delete their files as well*, dead torrents
+  are removed with their content once the delay has passed.
+
+### Changed
+
+- **A label no longer exempts its torrents from the daemon's stuck rule.** A
+  label with no rule of its own now falls through to the rule in Preferences,
+  Queue. Only *never remove* protects a label's torrents, and the rule pauses
+  them instead of removing them.
+
 ## [1.9.1] — 2026-10-06
 
 ### Added

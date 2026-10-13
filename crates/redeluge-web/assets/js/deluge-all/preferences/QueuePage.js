@@ -319,6 +319,11 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             ),
             style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });
+        this.stuck.dead_only = fieldset.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Only when the tracker says nobody has it (Dead)'),
+        });
         this.stuck.action = fieldset.add({
             xtype: 'combo',
             fieldLabel: _('Then:'),
@@ -350,7 +355,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
         fieldset.add({
             xtype: 'label',
             text: _(
-                'A label whose own rule is off is an exemption, so filing paused torrents in one is how they stop being looked at every minute — and how you find them again to decide.'
+                'This applies to every torrent whose label has no rule of its own. A label set to never remove gets its torrents paused instead. A paused torrent is not looked at again, and filing it in a label is how you find it later.'
             ),
             style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });
@@ -462,6 +467,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
                     action: this.stuck.action.getValue() || 'pause',
                     label: this.stuck.label.getValue() || '',
                     remove_data: this.stuck.remove_data.getValue() === true,
+                    dead_only: this.stuck.dead_only.getValue() === true,
                 },
             });
         }
@@ -508,6 +514,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
                 this.stuck.remove_data.setValue(
                     settings['remove_data'] !== false
                 );
+                this.stuck.dead_only.setValue(settings['dead_only'] === true);
                 this.onStuckToggled();
             },
             failure: function () {
@@ -529,6 +536,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
         var removing = this.stuck.action.getValue() === 'remove';
         this.stuck.hours.setDisabled(!on);
         this.stuck.max_progress.setDisabled(!on);
+        this.stuck.dead_only.setDisabled(!on);
         this.stuck.action.setDisabled(!on);
         // Each half belongs to one action and means nothing under the other.
         this.stuck.label.setDisabled(!on || removing);

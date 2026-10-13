@@ -102,6 +102,10 @@ pub struct Rule {
     /// rather than being a separate feature: the exemption already exists.
     pub label: String,
     pub remove_data: bool,
+    /// Only take torrents whose tracker also says the swarm is empty: the
+    /// sidebar's `Dead` group. Nothing arriving can be the connection; a
+    /// tracker answering zero seeds and zero peers is the content gone.
+    pub dead_only: bool,
 }
 
 impl Rule {
@@ -147,6 +151,9 @@ pub struct Settings {
     pub label: String,
     #[serde(default = "yes")]
     pub remove_data: bool,
+    /// Only torrents the tracker says nobody has. See [`Rule::dead_only`].
+    #[serde(default)]
+    pub dead_only: bool,
 }
 
 fn pause() -> String {
@@ -166,6 +173,7 @@ impl Default for Settings {
             action: pause(),
             label: String::new(),
             remove_data: true,
+            dead_only: false,
         }
     }
 }
@@ -195,6 +203,7 @@ impl Settings {
             action: Action::parse(&self.action),
             label: crate::core::normalise_label(self.label.trim()),
             remove_data: self.remove_data,
+            dead_only: self.dead_only,
         })
     }
 }
@@ -213,6 +222,14 @@ pub fn is_stuck(progress: f32, active_time: i64, mark: Option<&Mark>, rule: &Rul
         return false;
     };
     (active_time - mark.active_time) as f64 >= rule.seconds()
+}
+
+/// Whether the tracker has said nobody has this: zero seeds and zero peers.
+///
+/// `-1` is libtorrent for "the tracker has not said", which is not zero, and
+/// a rule that deletes must not read silence as an answer.
+pub fn swarm_is_empty(seeds: i32, peers: i32) -> bool {
+    seeds == 0 && peers == 0
 }
 
 /// The mark this torrent should carry after a pass.
@@ -238,7 +255,17 @@ mod tests {
             action: Action::Remove,
             label: String::new(),
             remove_data: true,
+            dead_only: false,
         }
+    }
+
+    #[test]
+    fn a_swarm_the_tracker_has_not_reported_is_not_empty() {
+        assert!(swarm_is_empty(0, 0));
+        assert!(!swarm_is_empty(-1, -1), "silence is not an answer");
+        assert!(!swarm_is_empty(0, -1));
+        assert!(!swarm_is_empty(1, 0));
+        assert!(!swarm_is_empty(0, 3));
     }
 
     #[test]

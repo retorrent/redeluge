@@ -1835,9 +1835,9 @@ struct StuckRemoval {
 ///
 /// Every torrent is measured, and which rule measures it is the most specific
 /// one that exists: its label's, if that label has one, otherwise the global
-/// rule. A label that has the rule off is a deliberate exemption from the
-/// global one, not a fall-through — a label is how somebody says "these are
-/// different", and it would be a poor rule that ignored them saying it.
+/// rule. A label with the rule off falls through to the global one; the way a
+/// label opts out of deletion is `never_remove`, which turns a removal into a
+/// pause, and that is the only exemption.
 ///
 /// What this will not take, each for a reason:
 ///
@@ -1888,10 +1888,15 @@ fn decide_stuck_removals(
             state.progress_marks.get(&status.info_hash),
         );
 
-        let mut rule = labels
+        let own = labels
             .options(&label)
-            .map(|options| options.stuck_rule())
-            .unwrap_or_else(|| global.clone());
+            .and_then(|options| options.stuck_rule());
+        let scope = if own.is_some() {
+            label.clone()
+        } else {
+            String::new()
+        };
+        let mut rule = own.or_else(|| global.clone());
 
         // The label's protection outranks this rule as well — including the
         // daemon-wide one, which knows nothing about labels. Pausing rather
@@ -1919,7 +1924,9 @@ fn decide_stuck_removals(
                 status.active_time,
                 state.progress_marks.get(&status.info_hash),
                 rule,
-            ) {
+            ) && (!rule.dead_only
+                || stuck::swarm_is_empty(status.num_complete, status.num_incomplete))
+            {
                 // The interlock. Everything else here asks "is this torrent
                 // getting anywhere"; this asks "is there anything it could be
                 // getting anywhere through". A tracker outage looks exactly
@@ -1933,11 +1940,7 @@ fn decide_stuck_removals(
                     None => out.push(StuckRemoval {
                         id: status.info_hash.clone(),
                         name,
-                        scope: if labels.options(&label).is_some() {
-                            label
-                        } else {
-                            String::new()
-                        },
+                        scope,
                         hours: rule.seconds() / 3600.0,
                         action: rule.action,
                         label_as: rule.label.clone(),
@@ -1962,9 +1965,8 @@ fn decide_stuck_removals(
 ///
 /// The gentle half of the rule, and the one it defaults to. Nothing is deleted
 /// and nothing is hidden: the torrent stops, keeps whatever it had, and lands
-/// in a label if the rule names one — which is also how it stops being
-/// reconsidered every minute, because a label with the rule off is an
-/// exemption.
+/// in a label if the rule names one. It is not reconsidered while it stays
+/// paused: the sweep never takes a paused torrent.
 async fn pause_stuck(core: &Core, stopped: &StuckRemoval, who: &str, how_long: &str, at: f64) {
     use redeluge_libtorrent::{flags, FlagChange};
 
