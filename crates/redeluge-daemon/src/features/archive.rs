@@ -141,35 +141,64 @@ impl ArchiveState {
     }
 }
 
+/// Filesystem types an archive can be on: FUSE (rclone, sshfs…) and the
+/// network filesystems. Anything else under a target's path means the mount
+/// is not there and what is visible is the directory it would cover.
+// ponytail: a target on a second local disk is never "online"; archive targets
+// are remote by design. A per-target expected type if that is ever wanted.
+const REMOTE_FILESYSTEMS: &[&str] = &[
+    "fuse",
+    "nfs",
+    "cifs",
+    "smb",
+    "9p",
+    "ceph",
+    "glusterfs",
+    "afs",
+    "davfs",
+    "virtiofs",
+];
+
+/// The type of the filesystem that holds `path`, from a `mountinfo` listing:
+/// the mount with the longest mount point that is `path` or above it.
+fn covering_fstype(mountinfo: &str, path: &str) -> Option<String> {
+    mountinfo
+        .lines()
+        .filter_map(|line| {
+            let (before, after) = line.split_once(" - ")?;
+            let mount_point = before.split(' ').nth(4)?.replace("\\040", " ");
+            let fstype = after.split(' ').next()?;
+            Some((mount_point, fstype.to_owned()))
+        })
+        .filter(|(mount_point, _)| mount_point == "/" || is_under(path, mount_point))
+        .max_by_key(|(mount_point, _)| mount_point.len())
+        .map(|(_, fstype)| fstype)
+}
+
+/// Whether a filesystem type is one an archive can be on.
+fn is_remote(fstype: &str) -> bool {
+    // By prefix: `fuse.rclone`, `nfs4`, `smb3` are all spelled that way.
+    REMOTE_FILESYSTEMS
+        .iter()
+        .any(|remote| fstype.starts_with(remote))
+}
+
 /// Whether a target answers. Blocking, and it can hang: see [`probe`].
 ///
-/// Answering means the path can be listed and that it is actually on a mount.
-/// The second matters because an rclone that was stopped cleanly leaves the
-/// mount point behind as an empty directory, which lists fine and holds none
-/// of the files.
+/// Answering means the path is on a FUSE or network mount and can be listed.
+/// The type matters, not just "is there a mount": in Docker the target is
+/// usually a bind mount itself, so there always is one, and when rclone is
+/// down what is left is that bind — an empty local directory that lists fine
+/// and holds none of the files. A crashed FUSE mount is still listed as fuse
+/// but cannot be read, which the listing catches.
 fn probe_blocking(path: &str) -> bool {
-    use std::os::unix::fs::MetadataExt;
-
-    let path = Path::new(path);
-    if std::fs::read_dir(path).is_err() {
+    let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") else {
+        return false;
+    };
+    if !covering_fstype(&mountinfo, path).is_some_and(|fstype| is_remote(&fstype)) {
         return false;
     }
-    // A mount somewhere between the path and the root: some ancestor sits on
-    // a different device from its own parent.
-    let mut here = path;
-    while let Some(parent) = here.parent() {
-        let (Ok(child), Ok(up)) = (std::fs::metadata(here), std::fs::metadata(parent)) else {
-            return false;
-        };
-        if child.dev() != up.dev() {
-            return true;
-        }
-        if parent == Path::new("/") {
-            break;
-        }
-        here = parent;
-    }
-    false
+    std::fs::read_dir(path).is_ok()
 }
 
 /// Whether a target answers, within [`PROBE_TIMEOUT`].
@@ -501,17 +530,47 @@ mod tests {
     }
 
     #[test]
-    fn a_mount_point_left_behind_is_not_a_mount() {
-        // A plain directory on the same filesystem as its parents is exactly
-        // what a cleanly stopped rclone leaves.
-        let dir = tempfile::tempdir().unwrap();
-        let inner = dir.path().join("mnt");
-        std::fs::create_dir(&inner).unwrap();
-        // tmp may itself be its own mount; the inner directory is on it either way.
-        let plain = std::fs::metadata(&inner).unwrap();
-        let parent = std::fs::metadata(dir.path()).unwrap();
-        use std::os::unix::fs::MetadataExt;
-        assert_eq!(plain.dev(), parent.dev());
+    fn a_bind_mount_left_behind_is_not_the_archive() {
+        // rclone's container binds the host directory, and redeluge's binds
+        // it again: with rclone up the path is under fuse.rclone, with rclone
+        // down it is under the bind, which is the local disk.
+        let up = "\
+22 1 0:21 / / rw - overlay overlay rw
+40 22 8:1 /srv/redeluge/archive /mnt/archive rw - ext4 /dev/sda1 rw
+57 40 0:52 / /mnt/archive/s4 rw - fuse.rclone s4:torrent rw
+";
+        let down = "\
+22 1 0:21 / / rw - overlay overlay rw
+40 22 8:1 /srv/redeluge/archive /mnt/archive rw - ext4 /dev/sda1 rw
+";
+        assert_eq!(
+            covering_fstype(up, "/mnt/archive/s4").as_deref(),
+            Some("fuse.rclone")
+        );
+        assert_eq!(
+            covering_fstype(up, "/mnt/archive/s4/films").as_deref(),
+            Some("fuse.rclone")
+        );
+        assert_eq!(
+            covering_fstype(down, "/mnt/archive/s4").as_deref(),
+            Some("ext4")
+        );
+        assert_eq!(
+            covering_fstype(up, "/mnt/archive/s40").as_deref(),
+            Some("ext4")
+        );
+        assert_eq!(
+            covering_fstype(down, "/downloads").as_deref(),
+            Some("overlay")
+        );
+
+        assert!(is_remote("fuse.rclone"));
+        assert!(is_remote("nfs4"));
+        assert!(is_remote("cifs"));
+        assert!(!is_remote("ext4"));
+        assert!(!is_remote("overlay"));
+        assert!(!is_remote("xfs"));
+
         assert!(!probe_blocking("/definitely/not/here"));
     }
 }

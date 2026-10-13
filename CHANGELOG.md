@@ -8,6 +8,22 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.10.1] — 2026-10-13
+
+### Fixed
+
+- **An archive target behind a Docker bind mount always counted as online.**
+  A target was online if some mount sat above its path, and in Docker the
+  bind mount always does — so with rclone down, the empty directory it leaves
+  was taken for the archive: a restart could recheck its torrents to nothing,
+  and a move could land on the local disk. A target is now online only when
+  its path is on a FUSE or network filesystem (read from
+  `/proc/self/mountinfo`) and lists.
+- **The Docker recipe for rclone failed to start** with `directory already
+  mounted`: rclone refuses to mount onto a bind-mounted path. It now mounts
+  into a subdirectory of the shared directory, and clears a mount left by a
+  crash before starting. See the wiki, *Docker*.
+
 ## [1.10.0] — 2026-10-13
 
 ### Fixed

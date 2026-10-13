@@ -874,8 +874,10 @@ archive, which deletes them from the bucket.
 ### When the mount goes away
 
 Every fifteen seconds each target is probed, with a five-second timeout: its
-directory must list, and it must actually be a mount — a stopped rclone leaves
-an empty directory behind. While a target is **offline**:
+path must be on a FUSE or network filesystem (`fuse.rclone`, NFS, CIFS…), and
+it must list. A stopped rclone leaves an empty local directory behind, which is
+offline, not an empty archive. So a target has to be such a mount: a directory
+on a second local disk is never considered online. While a target is **offline**:
 
 - its torrents are paused (an error they hit is cleared) and shown as
   **Remote Error**, with the error icon in orange;

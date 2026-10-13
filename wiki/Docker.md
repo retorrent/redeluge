@@ -149,8 +149,8 @@ it out.
 Once on the host:
 
 ```bash
-sudo mkdir -p /srv/redeluge/archive/s4 /srv/redeluge/rclone-cache
-# The directory the mount lands in has to be a shared mount itself.
+sudo mkdir -p /srv/redeluge/archive /srv/redeluge/rclone-cache
+# The directory both containers share has to be a shared mount itself.
 sudo mount --bind /srv/redeluge/archive /srv/redeluge/archive
 sudo mount --make-rshared /srv/redeluge/archive
 ```
@@ -181,18 +181,23 @@ services:
     cap_add: [SYS_ADMIN]
     devices: [/dev/fuse]
     security_opt: [apparmor:unconfined]
-    command: >
-      mount s4:my-bucket /mnt/s4
-      --allow-other --uid 1000 --gid 1000
-      --vfs-cache-mode full --vfs-cache-max-size 50G
-      --cache-dir /cache
-      --rc --rc-addr :5572 --rc-user redeluge --rc-pass ${RCLONE_RC_PASS:?set RCLONE_RC_PASS in .env}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        # A mount left by a crash would make rclone refuse to start.
+        fusermount3 -uz /data/s4 2>/dev/null || true
+        mkdir -p /data/s4
+        exec rclone mount s4:my-bucket /data/s4 \
+          --allow-other --uid ${PUID:-1000} --gid ${PGID:-1000} \
+          --vfs-cache-mode full --vfs-cache-max-size 50G \
+          --cache-dir /cache \
+          --rc --rc-addr :5572 --rc-user redeluge --rc-pass ${RCLONE_RC_PASS:?set RCLONE_RC_PASS in .env}
     volumes:
       - ./rclone:/config/rclone
       - /srv/redeluge/rclone-cache:/cache
       - type: bind
-        source: /srv/redeluge/archive/s4
-        target: /mnt/s4
+        source: /srv/redeluge/archive
+        target: /data
         bind: {propagation: rshared}
 
   redeluge:
@@ -202,29 +207,43 @@ services:
       - ./data/config:/config
       - ./data/downloads:/downloads
       - type: bind
-        source: /srv/redeluge/archive/s4
-        target: /mnt/s4
+        source: /srv/redeluge/archive
+        target: /mnt/archive
         bind: {propagation: rslave}
 ```
+
+rclone mounts **inside** the shared directory, at `/data/s4`, and redeluge
+sees it at `/mnt/archive/s4`. Mounting straight onto a bind-mounted path
+(`/mnt/s4` bound from the host) fails: rclone sees a mount already there and
+refuses (`directory already mounted, use --allow-non-empty`). Do not use
+`--allow-non-empty` to get past it: it would hide whatever was written there
+while the mount was down.
 
 Then in Preferences, *Archive*:
 
 ```text
-s4 | /mnt/s4 | http://redeluge:<RCLONE_RC_PASS>@rclone-s4:5572
+s4 | /mnt/archive/s4 | http://redeluge:<RCLONE_RC_PASS>@rclone-s4:5572
 ```
 
 and in a label's settings, *Archive*: target `s4`, and how long a torrent has
-to be idle before it goes.
+to be idle before it goes. More buckets are more `rclone-…` services, each
+mounting its own `/data/<name>`, all under the same shared directory.
 
 What each piece is for:
 
 | | |
 |---|---|
-| `rshared` / `rslave` | The mount rclone makes inside its container appears in redeluge's, and reappears after rclone restarts. Without them redeluge sees an empty directory, and reports the target offline |
-| `--allow-other --uid 1000 --gid 1000` | redeluge runs as `PUID`/`PGID` (1000 by default), not as rclone's root |
+| `rshared` / `rslave` | The mount rclone makes inside its container appears in redeluge's, and reappears after rclone restarts |
+| `fusermount3 -uz` first | A crashed rclone leaves a dead mount behind on the host, which the next start would refuse to mount over |
+| `--allow-other --uid --gid` | redeluge runs as `PUID`/`PGID` (1000 by default), not as rclone's root |
 | `--vfs-cache-mode full` | libtorrent reads and writes at random offsets; without the cache, writes into the mount fail |
 | `--vfs-cache-max-size` | Has to hold the largest torrent: a move into the archive is written to the cache, then uploaded. The cache lives on the local disk |
-| `--rc …` | Lets redeluge tell *uploading* from *archived*, and show the cache in the storage window. Optional. The password keeps other containers on the network from driving rclone; it is never written to the log |
+| `--rc …` | Lets redeluge tell *uploading* from *archived*, and show rclone's settings in Preferences, Archive. Optional. The password keeps other containers on the network from driving rclone; it is never written to the log |
+
+redeluge only counts a target as online when its path is on a FUSE or network
+filesystem (`fuse.rclone`, NFS, CIFS…) that answers. When rclone is down,
+`/mnt/archive/s4` is just an empty directory on the local disk, and it is
+treated as offline rather than as an empty archive.
 
 If the rclone container stops or crashes, the torrents on `/mnt/s4` show
 *Remote Error* and wait; `restart: unless-stopped` brings rclone back and they
