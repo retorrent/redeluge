@@ -159,6 +159,31 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
             style: 'display: block; margin: 2px 0 0 18px; color: #e6381f;',
         });
 
+        var archive = this.group(
+            'apply_archive',
+            _('Archive quiet torrents'),
+            _('Archive')
+        );
+        this.fields.archive_target = archive.add({
+            xtype: 'textfield',
+            fieldLabel: _('To target:'),
+            labelSeparator: '',
+            width: 160,
+            emptyText: _('a name from Preferences, Archive'),
+        });
+        this.fields.archive_after_hours = archive.add({
+            xtype: 'durationfield',
+            fieldLabel: _('After idle for:'),
+            width: 220,
+        });
+        archive.add({
+            xtype: 'label',
+            text: _(
+                'A finished torrent that has sent and received nothing for this long is moved to the archive and keeps seeding from there. Zero moves it as soon as it finishes. The other rules still apply: removing with files deletes them from the archive.'
+            ),
+            style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
+        });
+
         // Not a group either: it governs nothing, it refuses. A switch with
         // fields under it would suggest there is something to configure, and
         // there is not — the whole setting is the one line.
@@ -600,6 +625,7 @@ Deluge.LabelSettingsWindow.GROUPS = {
         'stuck_remove_data',
         'stuck_dead_only',
     ],
+    apply_archive: ['archive_target', 'archive_after_hours'],
 };
 
 /**
@@ -616,6 +642,7 @@ Deluge.LabelSettingsWindow.DEFAULTS = {
     max_upload_slots: -1,
     stop_ratio: 2,
     stuck_hours: 0,
+    archive_after_hours: 0,
     stuck_max_progress: 0,
     // The gentle action, matching the daemon: the one that deletes has to be
     // chosen rather than arrived at.

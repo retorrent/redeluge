@@ -36,6 +36,14 @@ constexpr lt::status_flags_t kStatusFlags =
 
 int64_t seconds_of(lt::seconds const value) { return value.count(); }
 
+/// Seconds since a payload transfer last happened, or -1 for never.
+/// libtorrent leaves the time point at its epoch until the first one.
+int64_t seconds_since(lt::time_point const when) {
+  if (when == lt::time_point{}) return -1;
+  return std::chrono::duration_cast<lt::seconds>(lt::clock_type::now() - when)
+      .count();
+}
+
 int64_t timestamp_of(std::time_t const value) {
   return static_cast<int64_t>(value);
 }
@@ -70,8 +78,8 @@ TorrentStatus convert(lt::torrent_status const& st) {
 
   out.active_time = seconds_of(st.active_duration);
   out.seeding_time = seconds_of(st.seeding_duration);
-  out.time_since_download = seconds_of(st.active_duration - st.finished_duration);
-  out.time_since_upload = seconds_of(st.seeding_duration);
+  out.time_since_download = seconds_since(st.last_download);
+  out.time_since_upload = seconds_since(st.last_upload);
   out.added_time = timestamp_of(st.added_time);
   out.completed_time = timestamp_of(st.completed_time);
   out.finished_time = seconds_of(st.finished_duration);

@@ -134,6 +134,102 @@ RPC listener accepts and buffers messages before authenticating.
 
 Peer traffic on 58946 is the one port that genuinely needs to be reachable.
 
+## With an S3 archive (rclone)
+
+To archive torrents to S3 (MEGA S4, R2, B2, AWS…) and keep seeding from there,
+rclone mounts the bucket in its own container and the mount is shared with
+redeluge's. See [Features](Features#archiving-to-s3-and-other-mounts) for
+what redeluge does with it.
+
+**Linux hosts only.** Sharing a FUSE mount between containers relies on mount
+propagation, which Docker Desktop on macOS and Windows does not offer for host
+folders. There, use the single-container lab in `docker/archive-lab/` to try
+it out.
+
+Once on the host:
+
+```bash
+sudo mkdir -p /srv/redeluge/archive/s4 /srv/redeluge/rclone-cache
+# The directory the mount lands in has to be a shared mount itself.
+sudo mount --bind /srv/redeluge/archive /srv/redeluge/archive
+sudo mount --make-rshared /srv/redeluge/archive
+```
+
+(The two `mount` lines do not survive a reboot: put them in `/etc/fstab`, as
+`/srv/redeluge/archive /srv/redeluge/archive none bind,rshared 0 0`, or in a
+systemd unit.)
+
+`./rclone/rclone.conf`, with keys made for this:
+
+```ini
+[s4]
+type = s3
+provider = Other
+endpoint = https://s3.<region>.megas4.com
+access_key_id = <key>
+secret_access_key = <secret>
+```
+
+`docker-compose.yml`:
+
+```yaml
+services:
+  rclone-s4:
+    image: rclone/rclone:1.68
+    container_name: rclone-s4
+    restart: unless-stopped
+    cap_add: [SYS_ADMIN]
+    devices: [/dev/fuse]
+    security_opt: [apparmor:unconfined]
+    command: >
+      mount s4:my-bucket /mnt/s4
+      --allow-other --uid 1000 --gid 1000
+      --vfs-cache-mode full --vfs-cache-max-size 50G
+      --cache-dir /cache
+      --rc --rc-addr :5572 --rc-user redeluge --rc-pass ${RCLONE_RC_PASS:?set RCLONE_RC_PASS in .env}
+    volumes:
+      - ./rclone:/config/rclone
+      - /srv/redeluge/rclone-cache:/cache
+      - type: bind
+        source: /srv/redeluge/archive/s4
+        target: /mnt/s4
+        bind: {propagation: rshared}
+
+  redeluge:
+    # ...everything from the stock docker-compose.yml, plus:
+    depends_on: [rclone-s4]
+    volumes:
+      - ./data/config:/config
+      - ./data/downloads:/downloads
+      - type: bind
+        source: /srv/redeluge/archive/s4
+        target: /mnt/s4
+        bind: {propagation: rslave}
+```
+
+Then in Preferences, *Archive*:
+
+```text
+s4 | /mnt/s4 | http://redeluge:<RCLONE_RC_PASS>@rclone-s4:5572
+```
+
+and in a label's settings, *Archive*: target `s4`, and how long a torrent has
+to be idle before it goes.
+
+What each piece is for:
+
+| | |
+|---|---|
+| `rshared` / `rslave` | The mount rclone makes inside its container appears in redeluge's, and reappears after rclone restarts. Without them redeluge sees an empty directory, and reports the target offline |
+| `--allow-other --uid 1000 --gid 1000` | redeluge runs as `PUID`/`PGID` (1000 by default), not as rclone's root |
+| `--vfs-cache-mode full` | libtorrent reads and writes at random offsets; without the cache, writes into the mount fail |
+| `--vfs-cache-max-size` | Has to hold the largest torrent: a move into the archive is written to the cache, then uploaded. The cache lives on the local disk |
+| `--rc …` | Lets redeluge tell *uploading* from *archived*, and show the cache in the storage window. Optional. The password keeps other containers on the network from driving rclone; it is never written to the log |
+
+If the rclone container stops or crashes, the torrents on `/mnt/s4` show
+*Remote Error* and wait; `restart: unless-stopped` brings rclone back and they
+resume without a recheck.
+
 ## Behaviour on failure
 
 `docker/run.sh` exits as soon as either process does, so a crashed daemon takes

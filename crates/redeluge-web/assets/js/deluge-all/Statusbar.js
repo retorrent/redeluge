@@ -272,10 +272,12 @@ Deluge.Statusbar = Ext.extend(Ext.ux.StatusBar, {
                 text: ' ',
                 cls: 'x-btn-text-icon',
                 iconCls: 'x-deluge-freespace',
-                tooltip: _('Freespace in download folder'),
+                tooltip: _('Free space in the download folder. Click for every disk and archive.'),
                 handler: function () {
-                    deluge.preferences.show();
-                    deluge.preferences.selectPage('Downloads');
+                    if (!deluge.storageWindow) {
+                        deluge.storageWindow = new Deluge.StorageWindow();
+                    }
+                    deluge.storageWindow.show();
                 },
             }
         );

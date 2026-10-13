@@ -37,6 +37,7 @@ pub mod rule {
     pub const RATIO: &str = "ratio";
     pub const FEED: &str = "feed";
     pub const BLOCKLIST: &str = "blocklist";
+    pub const ARCHIVE: &str = "archive";
 }
 
 /// What it did. Also short, and also read by the interface.

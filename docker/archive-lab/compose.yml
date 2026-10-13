@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# A local lab for archive targets: silo (MinIO) as the S3, two rclone mounts, and
+# redeluge on top. See README.md. Test credentials only; nothing here is
+# reachable from outside this machine.
+services:
+  minio:
+    # pgsty/silo, a maintained MinIO build: Docker Hub no longer carries
+    # minio/minio. The console is on 19001 to see what lands in the buckets.
+    image: docker.io/pgsty/silo:RELEASE.2026-09-16T00-00-00Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: lab
+      MINIO_ROOT_PASSWORD: labpassword
+    ports:
+      - "127.0.0.1:19001:9001"
+
+  lab:
+    build: .
+    depends_on: [minio]
+    devices: [/dev/fuse]
+    cap_add: [SYS_ADMIN]
+    security_opt: [apparmor:unconfined]
+    environment:
+      # Remotes behind the two targets. Point B at your own S3 by giving a
+      # rclone.conf next to this file and REMOTE_B=<remote>:<bucket>.
+      REMOTE_A: ${REMOTE_A:-minio:archive-a}
+      REMOTE_B: ${REMOTE_B:-minio:archive-b}
+      # The lab's Web UI password; lab.py logs in with it.
+      DELUGE_WEB_PASSWORD: deluge
+      # Targets to leave unmounted at start, e.g. LAB_DOWN=a: a restart
+      # during an outage.
+      LAB_DOWN: ${LAB_DOWN:-}
+    volumes:
+      - ../..:/src:ro
+      - config:/config
+      - downloads:/downloads
+      - cache:/cache
+    ports:
+      - "127.0.0.1:18112:8112"
+    command: ["bash", "/src/docker/archive-lab/start.sh"]
+
+volumes:
+  config:
+  downloads:
+  cache:

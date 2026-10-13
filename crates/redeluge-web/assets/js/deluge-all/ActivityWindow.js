@@ -185,6 +185,7 @@ Deluge.ActivityWindow = Ext.extend(Ext.Window, {
             ratio: _('Ratio'),
             feed: _('Feed'),
             blocklist: _('Blocklist'),
+            archive: _('Archive'),
         };
         return names[value] || Ext.util.Format.htmlEncode(value);
     },

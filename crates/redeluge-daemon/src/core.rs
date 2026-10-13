@@ -85,6 +85,8 @@ pub const REDELUGE_METHODS: &[&str] = &[
     "redeluge.get_identity_clients",
     "redeluge.get_orphans",
     "redeluge.get_recent_actions",
+    "redeluge.get_storage",
+    "redeluge.get_archive_info",
     "redeluge.get_peers",
     "redeluge.get_tracker_health",
     "redeluge.get_tracker_info",
@@ -164,14 +166,43 @@ impl Core {
     /// Restores the torrents a previous run left behind.
     pub async fn restore(&self) -> usize {
         let config_dir = self.config_dir.clone();
+
+        // Archive targets that are down now. A torrent on one is restored
+        // paused and not checked against the disk: checking finds no files,
+        // throws its progress away, and once resumed it downloads everything
+        // again into the empty mount point.
+        let targets = crate::features::archive::Settings::from_config(
+            self.config.lock().await.get("archive"),
+        )
+        .usable();
+        let mut offline = Vec::new();
+        for target in targets {
+            if !crate::features::archive::probe(target.path.clone()).await {
+                tracing::warn!(target = %target.name, path = %target.path,
+                    "archive target is offline at startup; its torrents stay paused");
+                offline.push(target.path);
+            }
+        }
+
         let restored = self
             .manager
             .with(move |state| {
                 let saved = crate::manager::SessionState::load_state(&config_dir);
                 let state_dir = state.state_dir();
                 let mut count = 0;
+                state.archive_offline = offline;
 
-                for options in saved {
+                for mut options in saved {
+                    let on_offline = options
+                        .save_path
+                        .as_deref()
+                        .is_some_and(|path| state.on_offline_archive(path));
+                    if on_offline && !options.paused {
+                        options.archive_paused = true;
+                        options.archive_was_managed = options.auto_managed;
+                        options.paused = true;
+                        options.auto_managed = false;
+                    }
                     let Some(mut request) = restore_request(&options, &state_dir) else {
                         tracing::warn!(id = %options.torrent_id,
                             "no torrent file or magnet, skipping");
@@ -181,6 +212,11 @@ impl Core {
                     // fresh add: without it every torrent rechecks from disk.
                     if let Some(blob) = state.load_resume_data(&options.torrent_id) {
                         request.resume_data = blob;
+                    }
+                    if on_offline {
+                        request.flags = request
+                            .flags
+                            .set_to(redeluge_libtorrent::flags::NO_VERIFY_FILES, true);
                     }
 
                     match state.session.add_torrent(&request) {
@@ -2086,6 +2122,15 @@ impl Rpc for Core {
             // What the daemon did without being asked, newest first. Each rule
             // that acts on its own writes a line here; `activity.rs` says why
             // the log file was not enough.
+            // Every place torrents live, local disks and archive targets, with
+            // what is free on each. The status bar's free-space button opens it.
+            "redeluge.get_storage" => Ok(json_to_value(&self.storage_report().await)),
+
+            // Each archive target as rclone has it set up, secrets left out,
+            // and which labels send torrents there. The Archive preferences
+            // page shows it.
+            "redeluge.get_archive_info" => Ok(json_to_value(&self.archive_info().await)),
+
             "redeluge.get_recent_actions" => {
                 let limit = args
                     .first()
@@ -2558,26 +2603,33 @@ fn glob_directory(pattern: &str) -> Vec<Value> {
 /// to this file: one reading, one meaning, whether it is answering a client or
 /// deciding whether to stop a download.
 pub(crate) fn free_space(path: &str) -> i64 {
+    disk_space(path).map_or(-1, |(free, _)| free)
+}
+
+/// Free and total bytes on the filesystem holding `path`.
+pub(crate) fn disk_space(path: &str) -> Option<(i64, i64)> {
     #[cfg(unix)]
     {
         use std::ffi::CString;
-        let Ok(c_path) = CString::new(path) else {
-            return -1;
-        };
+        let c_path = CString::new(path).ok()?;
         // SAFETY: statvfs writes into a struct we own and reads a NUL-terminated
         // path we own. Both outlive the call.
         unsafe {
             let mut stat: libc_statvfs = std::mem::zeroed();
             if statvfs(c_path.as_ptr(), &mut stat) != 0 {
-                return -1;
+                return None;
             }
-            (stat.f_bavail as i64).saturating_mul(stat.f_frsize as i64)
+            let unit = stat.f_frsize as i64;
+            Some((
+                (stat.f_bavail as i64).saturating_mul(unit),
+                (stat.f_blocks as i64).saturating_mul(unit),
+            ))
         }
     }
     #[cfg(not(unix))]
     {
         let _ = path;
-        -1
+        None
     }
 }
 
@@ -3222,7 +3274,213 @@ impl Core {
 
     /// Removes one torrent, telling every client before and after, as
     /// `core.remove_torrent` does.
+    /// Each archive target: its settings, whether it answers, what rclone
+    /// says about itself behind it, and the labels that use it.
+    async fn archive_info(&self) -> serde_json::Value {
+        use crate::features::archive;
+
+        let (targets, labels) = {
+            let config = self.config.lock().await;
+            (
+                archive::Settings::from_config(config.get("archive")).usable(),
+                crate::features::label::Settings::from_config(config.get("label")),
+            )
+        };
+        let offline = self
+            .manager
+            .with(|state| state.archive_offline.clone())
+            .await
+            .unwrap_or_default();
+
+        let client = reqwest::Client::new();
+        let mut rows = Vec::new();
+        for target in targets {
+            let online = !offline.contains(&target.path);
+            let rclone = match target.rc_url.is_empty() {
+                true => serde_json::Value::Object(Default::default()),
+                false => archive::describe(&client, &target.rc_url).await,
+            };
+            let rc = match (target.rc_url.is_empty(), rclone.get("version").is_some()) {
+                (true, _) => "none",
+                (false, true) => "ok",
+                (false, false) => "unreachable",
+            };
+            let used_by: Vec<&String> = labels
+                .labels
+                .iter()
+                .filter(|(_, options)| {
+                    options
+                        .archive_rule()
+                        .is_some_and(|(name, _)| name == target.name)
+                })
+                .map(|(label, _)| label)
+                .collect();
+            rows.push(serde_json::json!({
+                "name": target.name,
+                "path": target.path,
+                "rc_url": archive::redact(&target.rc_url),
+                "online": online,
+                "rc": rc,
+                "rclone": rclone,
+                "labels": used_by,
+            }));
+        }
+        serde_json::Value::Array(rows)
+    }
+
+    /// Every place torrents live and what is free there, for the storage
+    /// window: one row per local filesystem, one per archive target.
+    ///
+    /// Nothing here may hang on a dead mount: an archive the sweep found
+    /// offline is not measured at all, and every measurement has a timeout.
+    async fn storage_report(&self) -> serde_json::Value {
+        use crate::features::archive;
+        use serde_json::json;
+
+        let (download, move_completed, targets) = {
+            let config = self.config.lock().await;
+            (
+                config.string("download_location").unwrap_or("/").to_owned(),
+                config
+                    .boolean("move_completed")
+                    .unwrap_or(false)
+                    .then(|| config.string("move_completed_path").map(str::to_owned))
+                    .flatten(),
+                archive::Settings::from_config(config.get("archive")).usable(),
+            )
+        };
+
+        // Where each torrent is and how big it is, and which targets are down.
+        let (torrents, offline) = self
+            .manager
+            .with(|state| {
+                let torrents: Vec<(String, i64)> = state
+                    .session
+                    .all_torrent_status()
+                    .into_iter()
+                    .map(|status| (status.save_path, status.total_wanted.max(status.total_done)))
+                    .collect();
+                (torrents, state.archive_offline.clone())
+            })
+            .await
+            .unwrap_or_default();
+
+        async fn measure(path: String) -> Option<(i64, i64, u64)> {
+            let task = tokio::task::spawn_blocking(move || {
+                use std::os::unix::fs::MetadataExt;
+                let (free, total) = disk_space(&path)?;
+                let device = std::fs::metadata(&path).ok()?.dev();
+                Some((free, total, device))
+            });
+            tokio::time::timeout(archive::PROBE_TIMEOUT, task)
+                .await
+                .ok()?
+                .ok()?
+        }
+
+        // Local: the download folder, the completed folder, and every save
+        // path not on a target, folded together by filesystem.
+        let mut local_paths: Vec<String> = vec![download];
+        local_paths.extend(move_completed);
+        for (path, _) in &torrents {
+            if archive::target_of(path, &targets).is_none() && !local_paths.contains(path) {
+                local_paths.push(path.clone());
+            }
+        }
+        // Device -> (paths, free, total, torrents, bytes), in first-seen order.
+        let mut locals: Vec<(u64, Vec<String>, i64, i64, i64, i64)> = Vec::new();
+        for path in local_paths {
+            let Some((free, total, device)) = measure(path.clone()).await else {
+                locals.push((u64::MAX, vec![path], -1, -1, 0, 0));
+                continue;
+            };
+            let (count, bytes) = torrents
+                .iter()
+                .filter(|(at, _)| *at == path)
+                .fold((0, 0), |(count, bytes), (_, size)| {
+                    (count + 1, bytes + size)
+                });
+            match locals.iter_mut().find(|row| row.0 == device) {
+                Some(row) => {
+                    row.1.push(path);
+                    row.4 += count;
+                    row.5 += bytes;
+                }
+                None => locals.push((device, vec![path], free, total, count, bytes)),
+            }
+        }
+
+        let mut rows: Vec<serde_json::Value> = locals
+            .into_iter()
+            .map(|(_, paths, free, total, count, bytes)| {
+                json!({
+                    "kind": "local",
+                    "name": paths[0],
+                    "path": paths[0],
+                    "paths": paths,
+                    "online": free >= 0,
+                    "free": free,
+                    "total": total,
+                    "torrents": count,
+                    "torrent_bytes": bytes,
+                    "cache_used": -1,
+                    "uploads_pending": -1,
+                })
+            })
+            .collect();
+
+        let client = reqwest::Client::new();
+        for target in &targets {
+            let online = !offline.contains(&target.path);
+            let (free, total) = match online {
+                true => measure(target.path.clone())
+                    .await
+                    .map_or((-1, -1), |(free, total, _)| (free, total)),
+                false => (-1, -1),
+            };
+            let (cache_used, pending) = match online && !target.rc_url.is_empty() {
+                true => archive::cache_stats(&client, &target.rc_url)
+                    .await
+                    .unwrap_or((-1, -1)),
+                false => (-1, -1),
+            };
+            let (count, bytes) = torrents
+                .iter()
+                .filter(|(at, _)| archive::is_under(at, &target.path))
+                .fold((0, 0), |(count, bytes), (_, size)| {
+                    (count + 1, bytes + size)
+                });
+            rows.push(json!({
+                "kind": "archive",
+                "name": target.name,
+                "path": target.path,
+                "paths": [target.path],
+                "online": online,
+                "free": free,
+                "total": total,
+                "torrents": count,
+                "torrent_bytes": bytes,
+                "cache_used": cache_used,
+                "uploads_pending": pending,
+            }));
+        }
+        serde_json::Value::Array(rows)
+    }
+
     pub(crate) async fn remove_one(&self, id: &str, with_data: bool) -> Result<(), RpcError> {
+        let blocked = {
+            let id = id.to_owned();
+            self.manager
+                .with(move |state| state.removal_blocked(&id, with_data))
+                .await
+                .unwrap_or(false)
+        };
+        if blocked {
+            return Err(RpcError::new(
+                "InvalidTorrentError",
+                "its files are on an archive that is offline: remove it once the archive is back, or keep the files",
+            ));
+        }
         self.manager.announce(Event::PreTorrentRemoved {
             torrent_id: id.to_owned(),
         });

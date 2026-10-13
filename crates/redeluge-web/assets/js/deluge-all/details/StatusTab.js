@@ -112,6 +112,13 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
     diskState: function (status) {
         // Short on purpose: this is the last row of the last column, so a
         // sentence that wraps is a sentence with its second line cut off.
+        var archive = {
+            archiving: _('Moving to archive'),
+            syncing: _('Archive: uploading'),
+            archived: _('Archived'),
+            offline: _('Archive offline'),
+        }[status.archive_state];
+        if (archive) return archive;
         return status.space_paused ? _('Waiting for room') : _('Not held');
     },
 

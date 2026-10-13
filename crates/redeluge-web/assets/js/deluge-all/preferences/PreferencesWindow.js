@@ -104,6 +104,7 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
     initPages: function () {
         deluge.preferences = this;
         this.addPage(new Deluge.preferences.Downloads());
+        this.addPage(new Deluge.preferences.Archive());
         this.addPage(new Deluge.preferences.Network());
         this.addPage(new Deluge.preferences.Bandwidth());
         this.addPage(new Deluge.preferences.Interface());

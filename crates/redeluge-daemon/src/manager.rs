@@ -95,6 +95,12 @@ pub struct SessionState {
     /// longer than asked rather than shorter. `stuck.rs` says why the wall
     /// clock will not do.
     pub progress_marks: BTreeMap<String, crate::features::stuck::Mark>,
+    /// The paths of archive targets that did not answer the last probe.
+    ///
+    /// Read by everything that would touch files there — removal with data,
+    /// moves, the disk-space rule — so that none of them acts on a mount that
+    /// is down or hangs. See `archive.rs`.
+    pub archive_offline: Vec<String>,
     /// What each peer has done, across connections and restarts.
     ///
     /// Written by the sampler on the async side and saved from this thread on
@@ -115,6 +121,24 @@ pub struct SessionState {
 }
 
 impl SessionState {
+    /// Whether removing this torrent with its files has to wait: they are on
+    /// an archive that is offline, and a deletion half done on a mount that
+    /// comes back is the worst outcome there is.
+    pub fn removal_blocked(&self, id: &str, with_data: bool) -> bool {
+        with_data
+            && self
+                .session
+                .torrent_status(id)
+                .is_ok_and(|status| self.on_offline_archive(&status.save_path))
+    }
+
+    /// Whether a path is on an archive target that is offline.
+    pub fn on_offline_archive(&self, path: &str) -> bool {
+        self.archive_offline
+            .iter()
+            .any(|root| crate::features::archive::is_under(path, root))
+    }
+
     /// Where per-torrent files live: state, resume data, and `.torrent` copies.
     pub fn state_dir(&self) -> PathBuf {
         self.config_dir.join("state")
@@ -464,6 +488,7 @@ impl Manager {
             arr: crate::arr::Settings::load(&config_dir),
             first_tracker: BTreeMap::new(),
             progress_marks: BTreeMap::new(),
+            archive_offline: Vec::new(),
             activity: std::sync::Arc::clone(&activity),
             peers: std::sync::Arc::clone(&peers),
             countries: None,

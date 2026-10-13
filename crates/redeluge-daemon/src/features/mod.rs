@@ -18,6 +18,7 @@
 //! Each module keeps its decisions pure and testable. This file is where those
 //! decisions meet a running session, on a timer.
 
+pub mod archive;
 pub mod autoadd;
 pub mod blocklist;
 pub mod countrydb;
@@ -51,6 +52,7 @@ pub fn spawn(core: Arc<Core>) {
     tokio::spawn(guard_disk_space(Arc::clone(&core)));
     tokio::spawn(apply_tracker_rules(Arc::clone(&core)));
     tokio::spawn(remove_stuck_downloads(Arc::clone(&core)));
+    tokio::spawn(keep_archives(Arc::clone(&core)));
     tokio::spawn(keep_the_peer_ledger(Arc::clone(&core)));
     tokio::spawn(announce_torrents(Arc::clone(&core)));
     tokio::spawn(watch_tracker_health(Arc::clone(&core)));
@@ -553,7 +555,9 @@ async fn guard_disk_space(core: Arc<Core>) {
             continue;
         }
 
-        let free = tokio::task::spawn_blocking(move || {
+        // Bounded: a mount that hangs before the archive rule has noticed would
+        // otherwise stop this rule for good. The thread is left behind.
+        let measuring = tokio::task::spawn_blocking(move || {
             paths
                 .into_iter()
                 .map(|path| {
@@ -561,9 +565,14 @@ async fn guard_disk_space(core: Arc<Core>) {
                     (path, free)
                 })
                 .collect::<std::collections::BTreeMap<String, i64>>()
-        })
-        .await
-        .unwrap_or_default();
+        });
+        let free = match tokio::time::timeout(Duration::from_secs(10), measuring).await {
+            Ok(measured) => measured.unwrap_or_default(),
+            Err(_) => {
+                tracing::warn!("measuring free space timed out: a mount is not answering");
+                continue;
+            }
+        };
 
         match core
             .manager
@@ -603,7 +612,9 @@ fn save_paths_in_use(state: &mut crate::manager::SessionState) -> Vec<String> {
         .all_torrent_status()
         .into_iter()
         .map(|status| status.save_path)
-        .filter(|path| !path.is_empty())
+        // A mount that is down would hang the measurement, and the archive
+        // rule already holds whatever is on it.
+        .filter(|path| !path.is_empty() && !state.on_offline_archive(path))
         .collect();
     paths.sort();
     paths.dedup();
@@ -1048,7 +1059,7 @@ async fn apply_tracker_rules(core: Arc<Core>) {
         // the next pass measures again once the disk says what it really has.
         if !work.moving_now {
             for candidate in work.moves {
-                if start_tracker_move(&core, &candidate, now).await {
+                if start_move(&core, &candidate, now).await {
                     break;
                 }
             }
@@ -1202,15 +1213,19 @@ struct TrackerLabel {
     label: String,
 }
 
-/// A move a tracker's rule asks for, before anybody has looked at the disk.
+/// A move a rule asks for, before anybody has looked at the disk.
 struct TrackerMove {
     id: String,
     name: String,
+    /// Who asked: a tracker's domain, or a label.
     host: String,
     from: String,
     to: String,
     /// What will have to fit at the destination.
     size: i64,
+    /// Which rule, and what the history says about it.
+    which: &'static str,
+    detail: String,
 }
 
 /// A removal a tracker's rule asks for.
@@ -1324,6 +1339,8 @@ fn decide_tracker_work(
             && !status.moving_storage
             && tracker::due(finished, now, options.move_after_hours)
             && status.save_path.trim_end_matches('/') != options.move_path.trim_end_matches('/')
+            && !state.on_offline_archive(&status.save_path)
+            && !state.on_offline_archive(&options.move_path)
         {
             moving = true;
             work.moves.push(TrackerMove {
@@ -1336,6 +1353,11 @@ fn decide_tracker_work(
                 // the files that were asked for; `total_done` covers a torrent
                 // that has more on disk than it now wants.
                 size: status.total_wanted.max(status.total_done),
+                which: rule::TRACKER,
+                detail: format!(
+                    "{host} says its finished torrents go to {}",
+                    options.move_path
+                ),
             });
         }
 
@@ -1403,12 +1425,12 @@ fn decide_tracker_work(
     work
 }
 
-/// Starts a move a tracker's rule asked for, if the destination has room.
-/// Says whether it started.
+/// Starts a move a rule asked for, if the destination has room. Says whether
+/// it started.
 ///
 /// The disk is measured here rather than in the pass above, so the session
 /// thread is not held for a `statvfs` per torrent.
-async fn start_tracker_move(core: &Core, candidate: &TrackerMove, at: f64) -> bool {
+async fn start_move(core: &Core, candidate: &TrackerMove, at: f64) -> bool {
     let destination = std::path::Path::new(&candidate.to);
     let source = std::path::Path::new(&candidate.from);
 
@@ -1447,22 +1469,19 @@ async fn start_tracker_move(core: &Core, candidate: &TrackerMove, at: f64) -> bo
 
     match started {
         Ok(Ok(())) => {
-            tracing::info!(torrent = %candidate.id, tracker = %candidate.host,
-                destination = %candidate.to, "moving: the tracker's rule for finished torrents");
+            tracing::info!(torrent = %candidate.id, by = %candidate.host,
+                destination = %candidate.to, rule = candidate.which, "moving");
             record(
                 core,
-                Action::new(rule::TRACKER, did::MOVED, at)
+                Action::new(candidate.which, did::MOVED, at)
                     .torrent(&candidate.id, &candidate.name)
-                    .detail(format!(
-                        "{} says its finished torrents go to {}",
-                        candidate.host, candidate.to
-                    )),
+                    .detail(candidate.detail.clone()),
             );
             true
         }
         Ok(Err(err)) => {
             tracing::warn!(torrent = %candidate.id, error = %err,
-                "could not move a torrent its tracker's rule is due to move");
+                "could not move a torrent a rule is due to move");
             false
         }
         Err(err) => {
@@ -1519,6 +1538,20 @@ async fn remove_for_rule(
     // Announced before and after, like `core.remove_torrent`, because a client
     // holding the torrent's details has to be told to let go of them before
     // they stop existing.
+    //
+    // Not while its files are on an archive that is offline. Nothing is lost
+    // by waiting: the rule decides again on its next pass.
+    let blocked = {
+        let id = id.to_owned();
+        core.manager
+            .with(move |state| state.removal_blocked(&id, with_data))
+            .await
+            .unwrap_or(true)
+    };
+    if blocked {
+        tracing::debug!(torrent = %id, rule = which, "removal waits for its archive to come back");
+        return;
+    }
     core.manager.announce(Event::PreTorrentRemoved {
         torrent_id: id.to_owned(),
     });
@@ -1735,6 +1768,350 @@ async fn add_from_feed(core: &Core, feed: &rss::Feed, rule: &rss::Rule, item: &r
             }
         }
     }
+}
+
+// ------------------------------------------------------------------ archive
+
+/// Keeps the torrents on archive targets alive through their mounts' outages,
+/// and sends a label's quiet torrents to its target. See `archive.rs`.
+///
+/// Every fifteen seconds, the same as the disk-space rule: an outage has to
+/// be caught before libtorrent's next read on the mount fails, and a probe is
+/// a directory listing and a few `stat`s.
+async fn keep_archives(core: Arc<Core>) {
+    let client = reqwest::Client::new();
+    loop {
+        tokio::time::sleep(Duration::from_secs(15)).await;
+
+        let targets =
+            archive::Settings::from_config(setting(&core, "archive").await.as_ref()).usable();
+        let labels = label::Settings::from_config(setting(&core, "label").await.as_ref());
+
+        // All at once: one hung target must not delay noticing the others.
+        let mut probes = tokio::task::JoinSet::new();
+        for (index, target) in targets.iter().enumerate() {
+            let path = target.path.clone();
+            probes.spawn(async move { (index, archive::probe(path).await) });
+        }
+        let mut online = vec![false; targets.len()];
+        while let Some(Ok((index, up))) = probes.join_next().await {
+            online[index] = up;
+        }
+
+        let mut queues: Vec<Option<Vec<String>>> = vec![None; targets.len()];
+        for (index, target) in targets.iter().enumerate() {
+            if online[index] && !target.rc_url.is_empty() {
+                queues[index] = archive::upload_queue(&client, &target.rc_url).await;
+                if queues[index].is_none() {
+                    warn_once(
+                        &format!("archive rc {}", target.name),
+                        &format!(
+                            "rclone's remote control at {} is not answering",
+                            archive::redact(&target.rc_url)
+                        ),
+                    );
+                }
+            }
+        }
+
+        let at = now();
+        let work = match core
+            .manager
+            .with(move |state| sweep_archives(state, &targets, &online, &queues, &labels, at))
+            .await
+        {
+            Ok(work) => work,
+            Err(err) => {
+                tracing::warn!(error = %err, "the torrent manager is not answering");
+                continue;
+            }
+        };
+
+        for name in &work.went_down {
+            tracing::warn!(target = %name, "archive target is offline; holding its torrents");
+        }
+        for name in &work.came_up {
+            tracing::info!(target = %name, "archive target is back");
+        }
+        for (id, name, why) in work.paused {
+            record(
+                &core,
+                Action::new(rule::ARCHIVE, did::PAUSED, at)
+                    .torrent(&id, &name)
+                    .detail(why),
+            );
+        }
+        for (id, name) in work.released {
+            record(
+                &core,
+                Action::new(rule::ARCHIVE, did::RESUMED, at)
+                    .torrent(&id, &name)
+                    .detail("its archive answers again"),
+            );
+        }
+        // One at a time, for the same reason as the tracker rule's moves.
+        // ponytail: the tracker loop gates on its own pass, so the two can each
+        // start one move in the same minute; a shared gate if that ever bites.
+        for candidate in work.moves {
+            if start_move(&core, &candidate, at).await {
+                break;
+            }
+        }
+    }
+}
+
+/// What one pass of the archive rule decided.
+#[derive(Default)]
+struct ArchiveWork {
+    went_down: Vec<String>,
+    came_up: Vec<String>,
+    /// Paused, with why.
+    paused: Vec<(String, String, String)>,
+    released: Acted,
+    moves: Vec<TrackerMove>,
+}
+
+/// One pass of the archive rule over the library.
+fn sweep_archives(
+    state: &mut crate::manager::SessionState,
+    targets: &[archive::Target],
+    online: &[bool],
+    queues: &[Option<Vec<String>>],
+    labels: &label::Settings,
+    now: f64,
+) -> ArchiveWork {
+    use archive::{ArchiveState, Hold};
+    use redeluge_libtorrent::{flags, FlagChange};
+
+    let mut work = ArchiveWork::default();
+
+    let offline: Vec<String> = targets
+        .iter()
+        .zip(online)
+        .filter(|(_, up)| !**up)
+        .map(|(target, _)| target.path.clone())
+        .collect();
+    for (target, up) in targets.iter().zip(online) {
+        let was_down = state.archive_offline.contains(&target.path);
+        match (was_down, *up) {
+            (false, false) => work.went_down.push(target.name.clone()),
+            (true, true) => work.came_up.push(target.name.clone()),
+            _ => {}
+        }
+    }
+    state.archive_offline = offline;
+
+    let index_of = |target: &archive::Target| targets.iter().position(|t| t.path == target.path);
+
+    let statuses = state.session.all_torrent_status();
+    let mut moving_now = statuses.iter().any(|status| status.moving_storage);
+
+    let mut to_pause: Vec<(String, String, bool)> = Vec::new();
+    let mut to_release: Vec<String> = Vec::new();
+    let mut to_clear: Vec<String> = Vec::new();
+    let mut hand_resumed = false;
+
+    for status in &statuses {
+        let Some(torrent) = state.torrents.get_mut(&status.info_hash) else {
+            continue;
+        };
+        moving_now |= torrent.moving_to.is_some();
+
+        // Somebody resumed it by hand: it is theirs again.
+        if torrent.options.archive_paused && !status.is_paused {
+            torrent.options.archive_paused = false;
+            hand_resumed = true;
+        }
+
+        let here = archive::target_of(&status.save_path, targets);
+        let going = torrent
+            .moving_to
+            .as_deref()
+            .and_then(|to| archive::target_of(to, targets));
+
+        torrent.archive_state = match (here, going) {
+            (_, Some(going)) if here.map(|h| &h.path) != Some(&going.path) => {
+                Some(ArchiveState::Archiving)
+            }
+            (Some(target), _) => {
+                let index = index_of(target).unwrap_or(0);
+                if !online[index] || torrent.options.archive_paused {
+                    Some(ArchiveState::Offline)
+                } else {
+                    let relative = format!(
+                        "{}/{}",
+                        status.save_path[target.path.len()..].trim_matches('/'),
+                        status.name
+                    );
+                    match &queues[index] {
+                        Some(queue) if archive::is_syncing(&relative, queue) => {
+                            Some(ArchiveState::Syncing)
+                        }
+                        _ => Some(ArchiveState::Archived),
+                    }
+                }
+            }
+            (None, _) => None,
+        };
+
+        let Some(target) = here else {
+            // Off every target — moved away, or the target is gone from the
+            // configuration — and still held: nothing is left to wait for.
+            if torrent.options.archive_paused {
+                to_release.push(status.info_hash.clone());
+            }
+            continue;
+        };
+        let up = online[index_of(target).unwrap_or(0)];
+        let errored = status.error.is_some();
+        let held = torrent.options.archive_paused;
+
+        match archive::hold(
+            up,
+            held,
+            status.is_paused,
+            errored,
+            torrent.archive_retry_at,
+            now,
+        ) {
+            Hold::Pause => to_pause.push((status.info_hash.clone(), status.name.clone(), up)),
+            Hold::Release => to_release.push(status.info_hash.clone()),
+            Hold::Leave if held && errored => to_clear.push(status.info_hash.clone()),
+            Hold::Leave => {}
+        }
+    }
+
+    if hand_resumed {
+        state.mark_dirty();
+    }
+
+    // ------------------------------------------------------------- moves
+    if !moving_now {
+        for status in &statuses {
+            let Some(torrent) = state.torrents.get(&status.info_hash) else {
+                continue;
+            };
+            let Some((name, hours)) = labels
+                .options(&torrent.options.label)
+                .and_then(|options| options.archive_rule())
+            else {
+                continue;
+            };
+            let Some(target) = targets.iter().find(|target| target.name == name) else {
+                warn_once(
+                    &format!("archive target {name}"),
+                    &format!(
+                        "label {} archives to {name}, which is not a target",
+                        torrent.options.label
+                    ),
+                );
+                continue;
+            };
+            let up = online[index_of(target).unwrap_or(0)];
+            let finished = tracker::finished_at(status.completed_time, status.added_time, false);
+            let quiet = archive::idle_seconds(
+                status.time_since_download,
+                status.time_since_upload,
+                finished,
+                now,
+            )
+            .is_some_and(|idle| idle >= hours * 3600.0);
+
+            if up
+                && quiet
+                && status.is_finished
+                && status.has_metadata
+                && status.error.is_none()
+                && !status.moving_storage
+                && torrent.moving_to.is_none()
+                && !state.banned.contains(&status.info_hash)
+                && !archive::is_under(&status.save_path, &target.path)
+                && !state.on_offline_archive(&status.save_path)
+            {
+                work.moves.push(TrackerMove {
+                    id: status.info_hash.clone(),
+                    name: status.name.clone(),
+                    host: torrent.options.label.clone(),
+                    from: status.save_path.clone(),
+                    to: target.path.clone(),
+                    size: status.total_wanted.max(status.total_done),
+                    which: rule::ARCHIVE,
+                    detail: format!(
+                        "label {} archives quiet torrents to {}",
+                        torrent.options.label, target.name
+                    ),
+                });
+            }
+        }
+    }
+
+    // ---------------------------------------------------- holds and releases
+    for id in to_clear {
+        let _ = state.session.clear_error(&id);
+    }
+
+    for (id, name, up) in to_pause {
+        // Auto-management off, or the queue starts it again within a minute.
+        let change = FlagChange::new()
+            .set_to(flags::PAUSED, true)
+            .set_to(flags::AUTO_MANAGED, false);
+        if state.session.set_flags(&id, change).is_err() {
+            continue;
+        }
+        // Paused first, then the error cleared: the other order lets it start
+        // for a moment and fail again on the same mount.
+        let _ = state.session.clear_error(&id);
+        if let Some(torrent) = state.torrents.get_mut(&id) {
+            if !torrent.options.archive_paused {
+                torrent.options.archive_was_managed = torrent.options.auto_managed;
+            }
+            torrent.options.archive_paused = true;
+            torrent.options.paused = true;
+            torrent.options.auto_managed = false;
+            torrent.archive_state = Some(ArchiveState::Offline);
+            // While the target is down it waits for the target. When the
+            // target answers and it still failed, it waits a while.
+            torrent.archive_retry_at = if up { now + archive::RETRY_AFTER } else { 0.0 };
+        }
+        state.mark_dirty();
+        work.paused.push((
+            id,
+            name,
+            if up {
+                "it failed on its archive; trying again in five minutes".to_owned()
+            } else {
+                "its archive is offline".to_owned()
+            },
+        ));
+    }
+
+    for id in to_release {
+        let managed = state
+            .torrents
+            .get(&id)
+            .map(|torrent| torrent.options.archive_was_managed)
+            .unwrap_or(true);
+        let change = FlagChange::new()
+            .set_to(flags::PAUSED, false)
+            .set_to(flags::AUTO_MANAGED, managed);
+        if state.session.set_flags(&id, change).is_ok() {
+            let mut name = String::new();
+            if let Some(torrent) = state.torrents.get_mut(&id) {
+                name = torrent.options.name.clone().unwrap_or_default();
+                torrent.options.archive_paused = false;
+                torrent.options.paused = false;
+                torrent.options.auto_managed = managed;
+                torrent.archive_retry_at = 0.0;
+                if torrent.archive_state == Some(ArchiveState::Offline) {
+                    torrent.archive_state = Some(ArchiveState::Archived);
+                }
+            }
+            state.mark_dirty();
+            work.released.push((id, name));
+        }
+    }
+
+    work
 }
 
 // ------------------------------------------------------- downloads that stall

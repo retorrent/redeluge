@@ -113,6 +113,14 @@ pub struct TorrentOptions {
     #[serde(default = "yes")]
     pub space_was_managed: bool,
 
+    /// Whether the archive rule paused this because its target is offline.
+    /// Saved, so a restart during an outage still knows what to resume.
+    #[serde(default)]
+    pub archive_paused: bool,
+    /// Whether the queue managed it before that pause.
+    #[serde(default = "yes")]
+    pub archive_was_managed: bool,
+
     /// Trackers the user added or reordered, kept because libtorrent forgets
     /// them when a torrent is removed and re-added from resume data.
     #[serde(default)]
@@ -173,6 +181,8 @@ impl Default for TorrentOptions {
             idle_resume_at: 0.0,
             announced_finished: false,
             space_paused: false,
+            archive_paused: false,
+            archive_was_managed: true,
             space_was_managed: true,
             trackers: Vec::new(),
         }
@@ -201,6 +211,11 @@ pub struct Torrent {
     /// see [`content_fingerprint`]. Computed once, when the metadata is there,
     /// and kept because it cannot change afterwards.
     pub content_id: Option<String>,
+    /// Where its files are, as far as archiving goes. Set by the archive
+    /// sweep; `None` for files on local disk.
+    pub archive_state: Option<crate::features::archive::ArchiveState>,
+    /// When a torrent held after an error on its target may be tried again.
+    pub archive_retry_at: f64,
 }
 
 /// Which status keys a caller asked for.
@@ -243,6 +258,8 @@ impl Torrent {
             tracker_status: String::new(),
             moving_to: None,
             content_id: None,
+            archive_state: None,
+            archive_retry_at: 0.0,
         }
     }
 
@@ -319,6 +336,17 @@ impl Torrent {
             put("name", Value::Str(self.display_name(status)));
         }
         put("state", Value::Str(state.to_string()));
+        if keys.wants("archive_state") {
+            put(
+                "archive_state",
+                Value::Str(
+                    self.archive_state
+                        .map(|archived| archived.as_str())
+                        .unwrap_or("")
+                        .to_owned(),
+                ),
+            );
+        }
         if keys.wants("message") {
             put("message", Value::Str(self.message()));
         }
@@ -398,10 +426,13 @@ impl Torrent {
         put("active_time", Value::Int(status.active_time));
         put("seeding_time", Value::Int(status.seeding_time));
         put("finished_time", Value::Int(status.finished_time));
-        put(
-            "time_since_transfer",
-            Value::Int(status.time_since_download),
-        );
+        // Deluge's: the more recent of the two, -1 when neither happened.
+        let since = [status.time_since_download, status.time_since_upload]
+            .into_iter()
+            .filter(|seconds| *seconds >= 0)
+            .min()
+            .unwrap_or(-1);
+        put("time_since_transfer", Value::Int(since));
         put("last_seen_complete", Value::Int(status.last_seen_complete));
         put("next_announce", Value::Int(status.next_announce));
 

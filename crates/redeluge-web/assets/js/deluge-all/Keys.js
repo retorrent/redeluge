@@ -57,6 +57,7 @@ Deluge.Keys = {
         'idle_pause_at',
         'idle_resume_at',
         'space_paused',
+        'archive_state',
         'tracker_move_at',
         'tracker_remove_at',
     ],
@@ -141,6 +142,7 @@ Deluge.Keys = {
         'idle_pause_at',
         'idle_resume_at',
         'space_paused',
+        'archive_state',
     ],
 };
 
@@ -173,6 +175,8 @@ Deluge.Keys.Always = [
     'queue',
     'idle_resume_at',
     'space_paused',
+    // The name and progress columns draw a remote seed differently.
+    'archive_state',
 ];
 
 /**

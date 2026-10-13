@@ -8,7 +8,14 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
-## [Unreleased]
+## [1.10.0] — 2026-10-13
+
+### Fixed
+
+- **`time_since_transfer` reported the wrong thing.** It was the time spent
+  downloading, and the upload half was the total seeding time. It is now the
+  time since the last byte either way, `-1` when there has been none, as in
+  Deluge.
 
 ### Added
 
@@ -17,6 +24,25 @@ may refuse the new one.
   it to torrents in the *Dead* group: the tracker answered with zero seeds and
   zero peers. With *Remove it* and *Delete their files as well*, dead torrents
   are removed with their content once the delay has passed.
+
+- **Archive targets: seeding from S3 and other mounts.** A label can send its
+  finished torrents to a mounted archive (an rclone mount of an S3 bucket, a
+  NAS) once they have been idle for a set time, and they keep seeding from
+  there. Several targets, one per label. While a mount does not answer, its
+  torrents are paused and shown as *Remote Error* instead of going to Error,
+  nothing deletes or moves their files, and they resume without a recheck when
+  it is back — also across a restart. A new `archive_state` status key and
+  *Archive* column; torrents seeding from an archive show *Remote Seed*. See
+  the wiki, *Archiving to S3 and other mounts*, and *Docker* for a
+  `docker-compose.yml` with rclone in its own container.
+- **Preferences, Archive**: the targets, and each one as it really is — mount
+  online or not, rclone version, remote and bucket, type, provider, endpoint,
+  region, cache settings and the labels using it. Keys never leave rclone.
+  (`redeluge.get_archive_info`.)
+- **A storage window**: click the free-space figure in the status bar to see
+  every local disk the downloads use and every archive target, with free
+  space, the torrents on each, and rclone's cache and pending uploads.
+  (`redeluge.get_storage`.)
 
 ### Changed
 

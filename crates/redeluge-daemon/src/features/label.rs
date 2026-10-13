@@ -110,6 +110,19 @@ pub struct Options {
     #[serde(default)]
     pub stuck_dead_only: bool,
 
+    /// Send finished torrents to an archive target once they go quiet. See
+    /// `archive.rs`. The other rules are unaffected: a removal with data
+    /// deletes the files wherever they are, archive included.
+    #[serde(default)]
+    pub apply_archive: bool,
+    /// The target's name, from the `archive` key.
+    #[serde(default)]
+    pub archive_target: String,
+    /// Hours without a byte either way before the move. Zero moves a torrent
+    /// as soon as it finishes.
+    #[serde(default)]
+    pub archive_after_hours: f64,
+
     /// Never let a rule of the daemon's take these torrents away.
     ///
     /// A label outranks a tracker. A tracker rule says what a tracker's terms
@@ -190,6 +203,9 @@ impl Default for Options {
             stuck_label: String::new(),
             stuck_remove_data: true,
             stuck_dead_only: false,
+            apply_archive: false,
+            archive_target: String::new(),
+            archive_after_hours: 0.0,
             never_remove: false,
             hide_by_default: false,
             auto_add: false,
@@ -279,6 +295,19 @@ impl Options {
             remove_data: self.stuck_remove_data,
             dead_only: self.stuck_dead_only,
         })
+    }
+}
+
+impl Options {
+    /// Where this label archives to and after how long idle, when it does.
+    pub fn archive_rule(&self) -> Option<(&str, f64)> {
+        let target = self.archive_target.trim();
+        let hours = if self.archive_after_hours.is_finite() {
+            self.archive_after_hours.clamp(0.0, 87_600.0)
+        } else {
+            0.0
+        };
+        (self.apply_archive && !target.is_empty()).then_some((target, hours))
     }
 }
 

@@ -193,6 +193,7 @@ pub mod ffi {
         /// Seconds.
         active_time: i64,
         seeding_time: i64,
+        /// Since the last payload byte each way, wall clock; -1 for never.
         time_since_download: i64,
         time_since_upload: i64,
         /// Unix timestamps; 0 when it has not happened.

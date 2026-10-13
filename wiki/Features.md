@@ -843,6 +843,89 @@ Pressing Resume yourself ends the hold, though if the disk is still full the
 rule takes it again within fifteen seconds, which is the one case where a rule
 should win: there is nowhere to put what it would download.
 
+## Archiving to S3 and other mounts
+
+For a machine with a good link and a small disk: a label sends its finished
+torrents to an **archive target** once they have been quiet long enough, and
+they keep seeding from there. A target is a mounted directory — typically an
+S3 bucket through `rclone mount`, or a NAS. redeluge does not talk to S3
+itself; the mount does.
+
+Targets are set in Preferences, Archive, one per line
+(`name | mount path | rclone rc URL`), under the `archive` key. The same page
+shows each target as it really is: online or not, the rclone version, the
+remote and bucket it mounts, the remote's type, provider, endpoint and region,
+the cache settings and which labels use it — never the keys, which stay in
+rclone (`redeluge.get_archive_info`):
+
+```json
+{"targets": [{"name": "s4", "path": "/mnt/s4", "rc_url": "http://127.0.0.1:5572"}]}
+```
+
+A label picks one under *Archive* in its settings (`apply_archive`,
+`archive_target`, `archive_after_hours`): hours without a byte sent or
+received, zero to move a torrent as soon as it finishes. Several targets can be
+used at once, one per label. Where a torrent's files are is its save path; the
+rest follows from that, including moves made by hand.
+
+The other rules are unaffected. A removal with files deletes them from the
+archive, which deletes them from the bucket.
+
+### When the mount goes away
+
+Every fifteen seconds each target is probed, with a five-second timeout: its
+directory must list, and it must actually be a mount — a stopped rclone leaves
+an empty directory behind. While a target is **offline**:
+
+- its torrents are paused (an error they hit is cleared) and shown as
+  **Remote Error**, with the error icon in orange;
+- nothing removes or moves their files: a removal with files is refused, and
+  the rules wait;
+- the disk-space rule does not measure it, so a hung mount cannot stall it.
+
+When it answers again they resume where they were, **without a recheck** — a
+recheck would read the whole archive back from the remote. A torrent that fails
+on a target that does answer (a read that timed out) is held the same way and
+tried again after five minutes.
+
+If the daemon starts while a target is offline, its torrents are restored
+paused and not checked against the disk, so their progress survives instead of
+starting a download into the empty mount point.
+
+### What the list shows
+
+The `archive_state` status key, and the *Archive* column: `archiving` while the
+move runs, `syncing` while rclone is still uploading (needs `rc_url`, and
+rclone started with `--rc`), `archived`, `offline`. A torrent seeding from an
+archive shows **Remote Seed** with the seeding icon in cyan. Only the
+interface draws these: the `state` key still says `Seeding` or `Paused`, which
+is what every Deluge client and *arr understands.
+
+### rclone
+
+```bash
+rclone mount s4:bucket /mnt/s4 --vfs-cache-mode full --vfs-cache-max-size 20G \
+    --rc --rc-addr 127.0.0.1:5572 --rc-no-auth
+```
+
+- The VFS cache has to hold the largest torrent: a move into the mount is
+  written to the cache first, then uploaded.
+- Mind the provider's egress pricing: seeding is egress. R2 has none.
+- `docker/archive-lab/` is a local lab with two mounts and the outage cases
+  scripted. For a production `docker-compose.yml` with rclone in its own
+  container, see [Docker](Docker#with-an-s3-archive-rclone).
+- The rc can be password protected: `--rc-user` / `--rc-pass`, and
+  `http://user:pass@host:5572` as the target's rc URL.
+
+### Seeing every disk at once
+
+Click the free-space figure at the bottom right of the window: the *Storage*
+window lists each local filesystem the downloads use (with every path on it)
+and each archive target, with free space, how many torrents are on it and
+their size, whether it answers, and for rclone targets the cache size and the
+uploads still to go. A remote with no quota shows *No limit*.
+(`redeluge.get_storage`.)
+
 ## Finding a torrent
 
 The search box in the toolbar sends the daemon's `keyword` filter, which looks

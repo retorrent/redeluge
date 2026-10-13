@@ -432,6 +432,12 @@ pub fn defaults(config_dir: &Path) -> Vec<(String, Json)> {
             "stuck".into(),
             crate::features::stuck::Settings::default_json(),
         ),
+        // Mounted places torrents can be archived to. None until somebody
+        // names one; a label chooses which of them its torrents go to.
+        (
+            "archive".into(),
+            crate::features::archive::Settings::default_json(),
+        ),
         // What this client tells the swarm it is. `show` is the truth, which
         // is what a daemon nobody has configured has to be.
         (

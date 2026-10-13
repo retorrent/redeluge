@@ -495,6 +495,7 @@ fn the_daemon_claims_exactly_the_contracts_methods() {
 /// invented key visible: a typo in `defaults()` shipped once already, and a test
 /// against the contract is how it was found.
 const ADDED_BY_REDELUGE: &[&str] = &[
+    "archive",
     "autoadd",
     "blocklist",
     "countrydb",
@@ -592,6 +593,15 @@ fn each_feature_is_off_until_someone_turns_it_on() {
                 config.get(key).and_then(|value| value.get("mode")),
                 Some(&json!("show")),
                 "`identity` should tell the truth out of the box"
+            );
+            continue;
+        }
+        // Like `label`, a register: no targets is the same thing as off.
+        if *key == "archive" {
+            assert_eq!(
+                config.get(key).and_then(|value| value.get("targets")),
+                Some(&json!([])),
+                "`archive` should start with no targets"
             );
             continue;
         }

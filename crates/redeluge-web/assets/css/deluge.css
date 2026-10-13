@@ -54,6 +54,7 @@ button::-moz-focus-inner {
    name continued. The same div carries the state icon as a background, which
    is what the padding is for. */
 .deluge-torrents .torrent-name,
+.x-deluge-storage-media,
 .x-deluge-peer,
 .x-deluge-seed {
     padding-left: 20px;
@@ -126,6 +127,16 @@ button::-moz-focus-inner {
 .deluge-torrents .seeding,
 .x-deluge-seed {
     background-image: url('../icons/seeding.png');
+}
+/* Seeding from an archive mount: the seeding icon, turned cyan. */
+.x-deluge-remoteseed {
+    background-image: url('../icons/seeding.png');
+    filter: hue-rotate(-40deg) saturate(1.6);
+}
+/* Held because its archive does not answer: the error icon, turned orange. */
+.x-deluge-remoteerror {
+    background-image: url('../icons/alert.png');
+    filter: hue-rotate(25deg) saturate(1.3);
 }
 .x-deluge-queued,
 .x-btn .x-deluge-queued,

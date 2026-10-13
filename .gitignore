@@ -32,3 +32,6 @@ __pycache__/
 # inside an excluded directory.
 !crates/redeluge-web/assets/icons/
 !crates/redeluge-web/assets/icons/**
+
+# The archive lab: a real rclone.conf may hold real keys
+/docker/archive-lab/rclone.conf

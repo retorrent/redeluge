@@ -52,6 +52,8 @@ pub mod flags {
     pub const OVERRIDE_TRACKERS: u64 = 1 << 11;
     pub const OVERRIDE_WEB_SEEDS: u64 = 1 << 12;
     pub const NEED_SAVE_RESUME: u64 = 1 << 13;
+    /// Trust the resume data and do not look at the files on load.
+    pub const NO_VERIFY_FILES: u64 = 1 << 22;
 }
 
 /// Which flags to turn on and which to turn off.
