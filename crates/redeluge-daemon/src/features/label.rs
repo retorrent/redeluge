@@ -122,6 +122,12 @@ pub struct Options {
     /// as soon as it finishes.
     #[serde(default)]
     pub archive_after_hours: f64,
+    /// When this label does not archive, bring its torrents that are on an
+    /// archive back to the local disk. Off: a label change, which tracker
+    /// rules make on their own, must not pull hundreds of gigabytes back onto
+    /// a small disk unasked.
+    #[serde(default)]
+    pub restore_local: bool,
 
     /// Never let a rule of the daemon's take these torrents away.
     ///
@@ -206,6 +212,7 @@ impl Default for Options {
             apply_archive: false,
             archive_target: String::new(),
             archive_after_hours: 0.0,
+            restore_local: false,
             never_remove: false,
             hide_by_default: false,
             auto_add: false,
@@ -299,6 +306,22 @@ impl Options {
 }
 
 impl Options {
+    /// Where this label brings archived torrents back to, when it does: its
+    /// own completed folder if it has one, else `download`.
+    pub fn restore_to(&self, download: &str) -> Option<String> {
+        if !self.restore_local || self.archive_rule().is_some() {
+            return None;
+        }
+        let own = self.move_completed_path.trim();
+        Some(
+            if self.apply_move_completed && self.move_completed && !own.is_empty() {
+                own.to_owned()
+            } else {
+                download.to_owned()
+            },
+        )
+    }
+
     /// Where this label archives to and after how long idle, when it does.
     pub fn archive_rule(&self) -> Option<(&str, f64)> {
         let target = self.archive_target.trim();
@@ -388,6 +411,11 @@ impl Settings {
     /// Checked before the sweep walks the library, because nothing configured
     /// is the normal case and a status pass over three thousand torrents once
     /// a minute is not free.
+    /// Whether any label has its archive switch on, with a target or not.
+    pub fn any_archive_rule(&self) -> bool {
+        self.labels.values().any(|options| options.apply_archive)
+    }
+
     pub fn any_stuck_rule(&self) -> bool {
         self.labels.values().any(Options::removes_stuck)
     }
@@ -581,6 +609,42 @@ mod tests {
             .expect("the label")
             .apply_stuck = true;
         assert!(settings.any_stuck_rule());
+    }
+
+    #[test]
+    fn archived_torrents_come_back_only_when_asked_and_only_without_archive() {
+        let off = Options::default();
+        assert_eq!(off.restore_to("/downloads"), None, "off by default");
+
+        let asked = Options {
+            restore_local: true,
+            ..Options::default()
+        };
+        assert_eq!(
+            asked.restore_to("/downloads").as_deref(),
+            Some("/downloads")
+        );
+
+        let own_folder = Options {
+            restore_local: true,
+            apply_move_completed: true,
+            move_completed: true,
+            move_completed_path: "/films".to_owned(),
+            ..Options::default()
+        };
+        assert_eq!(
+            own_folder.restore_to("/downloads").as_deref(),
+            Some("/films")
+        );
+
+        // A label that archives is not one that brings things back.
+        let archives = Options {
+            restore_local: true,
+            apply_archive: true,
+            archive_target: "s4".to_owned(),
+            ..Options::default()
+        };
+        assert_eq!(archives.restore_to("/downloads"), None);
     }
 
     #[test]

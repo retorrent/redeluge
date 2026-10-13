@@ -118,7 +118,11 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
             archived: _('Archived'),
             offline: _('Archive offline'),
         }[status.archive_state];
-        if (archive) return archive;
+        if (archive) {
+            return status.archive_note
+                ? archive + ' — ' + Ext.util.Format.htmlEncode(status.archive_note)
+                : archive;
+        }
         if (status.archive_note) return Ext.util.Format.htmlEncode(status.archive_note);
         return status.space_paused ? _('Waiting for room') : _('Not held');
     },

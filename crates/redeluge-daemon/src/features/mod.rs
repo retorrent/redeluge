@@ -365,9 +365,6 @@ fn sweep_idle(
     let mut released = Vec::new();
     let mut paused = Vec::new();
 
-    // One snapshot for the whole pass: deciding needs to know what is running,
-    // what is waiting and what is actually paused, all as of the same moment.
-    let statuses = state.session.all_torrent_status();
     let session_paused = state.session_paused;
 
     // Torrents this rule is holding, whose time is up or whose rule has been
@@ -417,6 +414,13 @@ fn sweep_idle(
         state.idle_since.clear();
         return (released, paused);
     }
+
+    // One snapshot for the rest of the pass: deciding needs to know what is
+    // running, what is waiting and what is actually paused, all as of the same
+    // moment. Taken only now, because this runs every five seconds and the
+    // rule is off on most installs: a status sweep of the whole library to
+    // decide nothing was most of what this loop cost.
+    let statuses = state.session.all_torrent_status();
 
     let mut running = 0i64;
     let mut queued = 0i64;
@@ -544,8 +548,8 @@ async fn guard_disk_space(core: Arc<Core>) {
         let settings =
             diskspace::Settings::from_config(setting(&core, "disk_space").await.as_ref()).sane();
 
-        let paths = match core.manager.with(save_paths_in_use).await {
-            Ok(paths) => paths,
+        let (paths, statuses) = match core.manager.with(save_paths_in_use).await {
+            Ok(found) => found,
             Err(err) => {
                 tracing::warn!(error = %err, "the torrent manager is not answering");
                 continue;
@@ -576,7 +580,7 @@ async fn guard_disk_space(core: Arc<Core>) {
 
         match core
             .manager
-            .with(move |state| sweep_space(state, &settings, &free))
+            .with(move |state| sweep_space(state, &settings, &free, &statuses))
             .await
         {
             Ok((released, paused)) => {
@@ -605,20 +609,27 @@ async fn guard_disk_space(core: Arc<Core>) {
     }
 }
 
-/// Every filesystem the session is writing to, once each.
-fn save_paths_in_use(state: &mut crate::manager::SessionState) -> Vec<String> {
-    let mut paths: Vec<String> = state
-        .session
-        .all_torrent_status()
-        .into_iter()
-        .map(|status| status.save_path)
+/// Every filesystem the session is writing to, once each, and the snapshot
+/// they were read from.
+///
+/// The snapshot goes on to the pass itself rather than being taken again:
+/// this runs every fifteen seconds on every install, and the second status
+/// sweep of the whole library cost as much as the first for nothing a few
+/// milliseconds would change.
+fn save_paths_in_use(
+    state: &mut crate::manager::SessionState,
+) -> (Vec<String>, Vec<redeluge_libtorrent::TorrentStatus>) {
+    let statuses = state.session.all_torrent_status();
+    let mut paths: Vec<String> = statuses
+        .iter()
+        .map(|status| status.save_path.clone())
         // A mount that is down would hang the measurement, and the archive
         // rule already holds whatever is on it.
         .filter(|path| !path.is_empty() && !state.on_offline_archive(path))
         .collect();
     paths.sort();
     paths.dedup();
-    paths
+    (paths, statuses)
 }
 
 /// One pass of the disk-space rule.
@@ -629,17 +640,17 @@ fn sweep_space(
     state: &mut crate::manager::SessionState,
     settings: &diskspace::Settings,
     free: &std::collections::BTreeMap<String, i64>,
+    statuses: &[redeluge_libtorrent::TorrentStatus],
 ) -> (Acted, Acted) {
     use redeluge_libtorrent::{flags, FlagChange};
 
-    let statuses = state.session.all_torrent_status();
     let session_paused = state.session_paused;
 
     let mut to_release: Vec<String> = Vec::new();
     let mut to_pause: Vec<String> = Vec::new();
     let mut low_anywhere = false;
 
-    for status in &statuses {
+    for status in statuses {
         let verdict = free
             .get(&status.save_path)
             .map(|free| diskspace::judge(*free, settings))
@@ -1184,7 +1195,7 @@ async fn note_tracker_changes(core: &Core) {
 struct TrackerWork {
     limits: Vec<TrackerLimit>,
     labels: Vec<TrackerLabel>,
-    moves: Vec<TrackerMove>,
+    moves: Vec<RuleMove>,
     removals: Vec<TrackerRemoval>,
     /// Whether any torrent's files are being moved right now.
     moving_now: bool,
@@ -1214,7 +1225,7 @@ struct TrackerLabel {
 }
 
 /// A move a rule asks for, before anybody has looked at the disk.
-struct TrackerMove {
+struct RuleMove {
     id: String,
     name: String,
     /// Who asked: a tracker's domain, or a label.
@@ -1226,6 +1237,9 @@ struct TrackerMove {
     /// Which rule, and what the history says about it.
     which: &'static str,
     detail: String,
+    /// Onto an archive target, as opposed to back from one or a plain move:
+    /// what makes the torrent show "Moving to archive" straight away.
+    to_archive: bool,
 }
 
 /// A removal a tracker's rule asks for.
@@ -1343,7 +1357,7 @@ fn decide_tracker_work(
             && !state.on_offline_archive(&options.move_path)
         {
             moving = true;
-            work.moves.push(TrackerMove {
+            work.moves.push(RuleMove {
                 id: id.clone(),
                 name: status.name.clone(),
                 host: host.clone(),
@@ -1354,6 +1368,7 @@ fn decide_tracker_work(
                 // that has more on disk than it now wants.
                 size: status.total_wanted.max(status.total_done),
                 which: rule::TRACKER,
+                to_archive: false,
                 detail: format!(
                     "{host} says its finished torrents go to {}",
                     options.move_path
@@ -1430,7 +1445,7 @@ fn decide_tracker_work(
 ///
 /// The disk is measured here rather than in the pass above, so the session
 /// thread is not held for a `statvfs` per torrent.
-async fn start_move(core: &Core, candidate: &TrackerMove, at: f64) -> bool {
+async fn start_move(core: &Core, candidate: &RuleMove, at: f64) -> bool {
     let destination = std::path::Path::new(&candidate.to);
     let source = std::path::Path::new(&candidate.from);
 
@@ -1452,7 +1467,7 @@ async fn start_move(core: &Core, candidate: &TrackerMove, at: f64) -> bool {
 
     let id = candidate.id.clone();
     let to = candidate.to.clone();
-    let archiving = candidate.which == rule::ARCHIVE;
+    let archiving = candidate.to_archive;
     let started = core
         .manager
         .with(move |state| {
@@ -1786,13 +1801,38 @@ async fn add_from_feed(core: &Core, feed: &rss::Feed, rule: &rss::Rule, item: &r
 /// be caught before libtorrent's next read on the mount fails, and a probe is
 /// a directory listing and a few `stat`s.
 async fn keep_archives(core: Arc<Core>) {
-    let client = reqwest::Client::new();
+    let client = archive::client();
     loop {
         tokio::time::sleep(Duration::from_secs(15)).await;
 
         let targets =
             archive::Settings::from_config(setting(&core, "archive").await.as_ref()).usable();
         let labels = label::Settings::from_config(setting(&core, "label").await.as_ref());
+        let download = setting(&core, "download_location")
+            .await
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "/downloads".to_owned());
+
+        // Nothing configured is the normal case, and what is behind this is a
+        // status sweep of the whole library every fifteen seconds. Unless
+        // something is left over to undo — a hold, a state, a note from when
+        // there were targets — there is nothing to do.
+        if targets.is_empty() && !labels.any_archive_rule() {
+            let leftovers = core
+                .manager
+                .with(|state| {
+                    state.torrents.values().any(|torrent| {
+                        torrent.options.archive_paused
+                            || torrent.archive_state.is_some()
+                            || !torrent.archive_note.is_empty()
+                    }) || !state.archive_offline.is_empty()
+                })
+                .await
+                .unwrap_or(false);
+            if !leftovers {
+                continue;
+            }
+        }
 
         // All at once: one hung target must not delay noticing the others.
         let mut probes = tokio::task::JoinSet::new();
@@ -1808,7 +1848,7 @@ async fn keep_archives(core: Arc<Core>) {
         let mut queues: Vec<Option<Vec<String>>> = vec![None; targets.len()];
         for (index, target) in targets.iter().enumerate() {
             if online[index] && !target.rc_url.is_empty() {
-                queues[index] = archive::upload_queue(&client, &target.rc_url).await;
+                queues[index] = archive::upload_queue(client, &target.rc_url).await;
                 if queues[index].is_none() {
                     warn_once(
                         &format!("archive rc {}", target.name),
@@ -1824,7 +1864,9 @@ async fn keep_archives(core: Arc<Core>) {
         let at = now();
         let work = match core
             .manager
-            .with(move |state| sweep_archives(state, &targets, &online, &queues, &labels, at))
+            .with(move |state| {
+                sweep_archives(state, &targets, &online, &queues, &labels, &download, at)
+            })
             .await
         {
             Ok(work) => work,
@@ -1885,7 +1927,7 @@ struct ArchiveWork {
     /// Paused, with why.
     paused: Vec<(String, String, String)>,
     released: Acted,
-    moves: Vec<TrackerMove>,
+    moves: Vec<RuleMove>,
 }
 
 /// One pass of the archive rule over the library.
@@ -1895,6 +1937,7 @@ fn sweep_archives(
     online: &[bool],
     queues: &[Option<Vec<String>>],
     labels: &label::Settings,
+    download: &str,
     now: f64,
 ) -> ArchiveWork {
     use archive::{ArchiveState, Hold};
@@ -2037,6 +2080,49 @@ fn sweep_archives(
             continue;
         }
         let Some((name, hours)) = options.and_then(|options| options.archive_rule()) else {
+            // Its label does not archive. On an archive, it either stays —
+            // said out loud — or, if the label asks, comes back.
+            let Some(here) = archive::target_of(&status.save_path, targets) else {
+                continue;
+            };
+            let label_name = if torrent.options.label.is_empty() {
+                "(none)".to_owned()
+            } else {
+                torrent.options.label.clone()
+            };
+            let Some(home) = options.and_then(|options| options.restore_to(download)) else {
+                notes.push((
+                    status.info_hash.clone(),
+                    format!(
+                        "on {}: label {label_name} does not archive, so it stays there",
+                        here.name
+                    ),
+                ));
+                continue;
+            };
+            let note = if !online[index_of(here).unwrap_or(0)] {
+                Some(format!("waiting to come back: {} is offline", here.name))
+            } else if status.moving_storage || torrent.moving_to.is_some() {
+                None
+            } else if moving_now || !work.moves.is_empty() {
+                Some("queued to come back: one move at a time".to_owned())
+            } else {
+                work.moves.push(RuleMove {
+                    id: status.info_hash.clone(),
+                    name: status.name.clone(),
+                    host: torrent.options.label.clone(),
+                    from: status.save_path.clone(),
+                    to: home.clone(),
+                    size: status.total_wanted.max(status.total_done),
+                    which: rule::ARCHIVE,
+                    to_archive: false,
+                    detail: format!("label {label_name} brings archived torrents back to {home}"),
+                });
+                None
+            };
+            if let Some(note) = note {
+                notes.push((status.info_hash.clone(), note));
+            }
             continue;
         };
         let Some(target) = targets.iter().find(|target| target.name == name) else {
@@ -2062,47 +2148,39 @@ fn sweep_archives(
         );
         let wanted = hours * 3600.0;
 
-        let waiting = if !up {
-            Some(format!("waiting: {} is offline", target.name))
-        } else if !status.is_finished || !status.has_metadata {
-            Some("waiting: the download is not finished".to_owned())
-        } else if status.error.is_some() {
-            Some("waiting: the torrent is in error".to_owned())
-        } else if state.banned.contains(&status.info_hash) {
-            Some("not archived: the torrent is banned".to_owned())
-        } else if state.on_offline_archive(&status.save_path) {
-            Some("waiting: its current location is offline".to_owned())
-        } else if idle.is_none_or(|idle| idle < wanted) {
-            Some(format!(
-                "waiting: idle {} of the {} the label asks for",
-                describe_seconds(idle.unwrap_or(0.0)),
-                describe_seconds(wanted)
-            ))
-        } else if status.moving_storage || torrent.moving_to.is_some() {
-            None
-        } else if moving_now || !work.moves.is_empty() {
-            Some(format!(
-                "queued: one move at a time{}",
-                moving_name
-                    .as_ref()
-                    .map(|name| format!(", {name} is moving"))
-                    .unwrap_or_default()
-            ))
-        } else {
-            work.moves.push(TrackerMove {
-                id: status.info_hash.clone(),
-                name: status.name.clone(),
-                host: torrent.options.label.clone(),
-                from: status.save_path.clone(),
-                to: target.path.clone(),
-                size: status.total_wanted.max(status.total_done),
-                which: rule::ARCHIVE,
-                detail: format!(
-                    "label {} archives quiet torrents to {}",
-                    torrent.options.label, target.name
-                ),
-            });
-            None
+        let verdict = archive::decide(&archive::Candidate {
+            target: &target.name,
+            online: up,
+            finished: status.is_finished && status.has_metadata,
+            errored: status.error.is_some(),
+            banned: state.banned.contains(&status.info_hash),
+            source_offline: state.on_offline_archive(&status.save_path),
+            idle,
+            wanted,
+            moving: status.moving_storage || torrent.moving_to.is_some(),
+            queue_busy: moving_now || !work.moves.is_empty(),
+            moving_name: moving_name.as_deref(),
+        });
+        let waiting = match verdict {
+            archive::Verdict::Move => {
+                work.moves.push(RuleMove {
+                    id: status.info_hash.clone(),
+                    name: status.name.clone(),
+                    host: torrent.options.label.clone(),
+                    from: status.save_path.clone(),
+                    to: target.path.clone(),
+                    size: status.total_wanted.max(status.total_done),
+                    which: rule::ARCHIVE,
+                    to_archive: true,
+                    detail: format!(
+                        "label {} archives quiet torrents to {}",
+                        torrent.options.label, target.name
+                    ),
+                });
+                None
+            }
+            archive::Verdict::Moving => None,
+            archive::Verdict::Wait(note) => Some(note),
         };
         if let Some(note) = waiting {
             notes.push((status.info_hash.clone(), note));
@@ -2562,18 +2640,6 @@ fn describe_delay(hours: f64) -> String {
         return "for an hour".to_owned();
     }
     format!("for {} hours", trim_number(hours))
-}
-
-/// A duration for a person: `3d 4h`, `2h 10m`, `45m`, `30s`.
-fn describe_seconds(seconds: f64) -> String {
-    let seconds = seconds.max(0.0) as u64;
-    let (days, hours, minutes) = (seconds / 86_400, seconds / 3600 % 24, seconds / 60 % 60);
-    match (days, hours, minutes) {
-        (0, 0, 0) => format!("{seconds}s"),
-        (0, 0, m) => format!("{m}m"),
-        (0, h, m) => format!("{h}h {m}m"),
-        (d, h, _) => format!("{d}d {h}h"),
-    }
 }
 
 /// A number without the trailing zeroes a float prints, so a history line says
@@ -3456,14 +3522,6 @@ mod tests {
             .iter()
             .map(|word| tracker_news(&mut reported, "tracker.example.com", word))
             .collect()
-    }
-
-    #[test]
-    fn durations_read_like_a_person_wrote_them() {
-        assert_eq!(describe_seconds(30.0), "30s");
-        assert_eq!(describe_seconds(45.0 * 60.0), "45m");
-        assert_eq!(describe_seconds(2.0 * 3600.0 + 600.0), "2h 10m");
-        assert_eq!(describe_seconds(3.0 * 86400.0 + 4.0 * 3600.0), "3d 4h");
     }
 
     #[test]

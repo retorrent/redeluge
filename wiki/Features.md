@@ -871,6 +871,21 @@ rest follows from that, including moves made by hand.
 The other rules are unaffected. A removal with files deletes them from the
 archive, which deletes them from the bucket.
 
+A torrent whose label changes keeps its files where they are unless told
+otherwise: moved to a label that archives elsewhere, it follows; moved to a
+label that does not archive, it stays on the archive and keeps seeding, and
+its *Archive* column says so. A label can instead *Bring archived torrents back
+to local disk* (`restore_local`): its torrents on an archive move back to its
+completed folder, or the download folder, one at a time and only if there is
+room. It is off by default because tracker rules relabel torrents on their
+own, and that must not pull an archive back onto a small disk unasked.
+
+When a label archives and a torrent has not gone yet, the *Archive* column
+says *Waiting* and the *Status* tab says why: the download is not finished,
+it has been idle for less than the label asks, another move is running, the
+target is offline, there is no room, or the label has Archive on with no
+target chosen (`archive_note` in the status).
+
 ### When the mount goes away
 
 Every fifteen seconds each target is probed, with a five-second timeout: its

@@ -237,10 +237,18 @@
                         archived: _('Archived'),
                         offline: _('Offline'),
                     }[value];
-                    if (shown) return shown;
+                    var note = r.data['archive_note'];
+                    if (shown) {
+                        return note
+                            ? String.format(
+                                  '<span ext:qtip="{0}">{1}</span>',
+                                  Ext.util.Format.htmlEncode(note),
+                                  shown
+                              )
+                            : shown;
+                    }
                     // Its label wants it archived and something is in the
                     // way: say so, with the reason on hover.
-                    var note = r.data['archive_note'];
                     if (!note) return '';
                     return String.format(
                         '<span ext:qtip="{0}" style="opacity: 0.8;">{1}</span>',

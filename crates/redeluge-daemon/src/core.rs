@@ -3292,13 +3292,13 @@ impl Core {
             .await
             .unwrap_or_default();
 
-        let client = reqwest::Client::new();
+        let client = archive::client();
         let mut rows = Vec::new();
         for target in targets {
             let online = !offline.contains(&target.path);
             let rclone = match target.rc_url.is_empty() {
                 true => serde_json::Value::Object(Default::default()),
-                false => archive::describe(&client, &target.rc_url).await,
+                false => archive::describe(client, &target.rc_url).await,
             };
             let rc = match (target.rc_url.is_empty(), rclone.get("version").is_some()) {
                 (true, _) => "none",
@@ -3380,11 +3380,22 @@ impl Core {
 
         // Local: the download folder, the completed folder, and every save
         // path not on a target, folded together by filesystem.
+        // Torrents per save path, counted once: a library can have thousands
+        // of torrents and, with an *arr per-item folder, nearly as many paths.
+        let mut per_path: std::collections::BTreeMap<&str, (i64, i64)> =
+            std::collections::BTreeMap::new();
+        for (path, size) in &torrents {
+            let entry = per_path.entry(path.as_str()).or_default();
+            entry.0 += 1;
+            entry.1 += size;
+        }
         let mut local_paths: Vec<String> = vec![download];
         local_paths.extend(move_completed);
-        for (path, _) in &torrents {
-            if archive::target_of(path, &targets).is_none() && !local_paths.contains(path) {
-                local_paths.push(path.clone());
+        for path in per_path.keys() {
+            if archive::target_of(path, &targets).is_none()
+                && !local_paths.iter().any(|p| p == path)
+            {
+                local_paths.push((*path).to_owned());
             }
         }
         // Device -> (paths, free, total, torrents, bytes), in first-seen order.
@@ -3394,12 +3405,7 @@ impl Core {
                 locals.push((u64::MAX, vec![path], -1, -1, 0, 0));
                 continue;
             };
-            let (count, bytes) = torrents
-                .iter()
-                .filter(|(at, _)| *at == path)
-                .fold((0, 0), |(count, bytes), (_, size)| {
-                    (count + 1, bytes + size)
-                });
+            let (count, bytes) = per_path.get(path.as_str()).copied().unwrap_or_default();
             match locals.iter_mut().find(|row| row.0 == device) {
                 Some(row) => {
                     row.1.push(path);
@@ -3429,7 +3435,7 @@ impl Core {
             })
             .collect();
 
-        let client = reqwest::Client::new();
+        let client = archive::client();
         for target in &targets {
             let online = !offline.contains(&target.path);
             let (free, total) = match online {
@@ -3439,16 +3445,16 @@ impl Core {
                 false => (-1, -1),
             };
             let (cache_used, pending) = match online && !target.rc_url.is_empty() {
-                true => archive::cache_stats(&client, &target.rc_url)
+                true => archive::cache_stats(client, &target.rc_url)
                     .await
                     .unwrap_or((-1, -1)),
                 false => (-1, -1),
             };
-            let (count, bytes) = torrents
+            let (count, bytes) = per_path
                 .iter()
                 .filter(|(at, _)| archive::is_under(at, &target.path))
-                .fold((0, 0), |(count, bytes), (_, size)| {
-                    (count + 1, bytes + size)
+                .fold((0, 0), |(count, bytes), (_, (n, size))| {
+                    (count + n, bytes + size)
                 });
             rows.push(json!({
                 "kind": "archive",

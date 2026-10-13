@@ -177,9 +177,15 @@ fn covering_fstype(mountinfo: &str, path: &str) -> Option<String> {
 
 /// Whether a filesystem type is one an archive can be on.
 fn is_remote(fstype: &str) -> bool {
-    // By prefix: `fuse.rclone`, `nfs4`, `smb3` are all spelled that way.
+    // FUSE is `fuse.<program>`; plain `fuse` and `fuseblk` are local disks
+    // (ntfs-3g and the like). The network ones are matched by prefix:
+    // `nfs4`, `smb3` are spelled that way.
+    if let Some(program) = fstype.strip_prefix("fuse.") {
+        return !program.is_empty();
+    }
     REMOTE_FILESYSTEMS
         .iter()
+        .filter(|remote| **remote != "fuse")
         .any(|remote| fstype.starts_with(remote))
 }
 
@@ -212,6 +218,13 @@ pub async fn probe(path: String) -> bool {
         tokio::time::timeout(PROBE_TIMEOUT, task).await,
         Ok(Ok(true))
     )
+}
+
+/// The HTTP client every call to rclone's rc goes through: one connection pool
+/// for the daemon rather than a new one per report.
+pub fn client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(reqwest::Client::new)
 }
 
 /// One call to rclone's remote control. `None` when it did not answer.
@@ -398,6 +411,92 @@ pub fn idle_seconds(
     }
 }
 
+/// A duration for a person: `3d 4h`, `2h 10m`, `45m`, `30s`.
+pub fn duration(seconds: f64) -> String {
+    let seconds = seconds.max(0.0) as u64;
+    let (days, hours, minutes) = (seconds / 86_400, seconds / 3600 % 24, seconds / 60 % 60);
+    match (days, hours, minutes) {
+        (0, 0, 0) => format!("{seconds}s"),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
+}
+
+/// What the move rule knows about one torrent its label wants archived.
+pub struct Candidate<'a> {
+    pub target: &'a str,
+    pub online: bool,
+    /// Finished, with its metadata.
+    pub finished: bool,
+    pub errored: bool,
+    pub banned: bool,
+    /// Its files are on an archive that is offline right now.
+    pub source_offline: bool,
+    /// Seconds without a byte either way, when known.
+    pub idle: Option<f64>,
+    /// Seconds the label asks for.
+    pub wanted: f64,
+    /// It is being moved already.
+    pub moving: bool,
+    /// Another move is running, or one was chosen earlier in this pass.
+    pub queue_busy: bool,
+    pub moving_name: Option<&'a str>,
+}
+
+/// What to do with a torrent a label wants archived.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Verdict {
+    Move,
+    /// Its move is under way.
+    Moving,
+    /// Not now, and why, in words for the interface.
+    Wait(String),
+}
+
+/// Whether a torrent goes to its archive now, and if not, why.
+///
+/// The order is the order a person would look in: things only they can fix
+/// first, the passage of time after, the queue last.
+pub fn decide(candidate: &Candidate) -> Verdict {
+    let wait = |text: String| Verdict::Wait(text);
+    if !candidate.online {
+        return wait(format!("waiting: {} is offline", candidate.target));
+    }
+    if !candidate.finished {
+        return wait("waiting: the download is not finished".to_owned());
+    }
+    if candidate.errored {
+        return wait("waiting: the torrent is in error".to_owned());
+    }
+    if candidate.banned {
+        return wait("not archived: the torrent is banned".to_owned());
+    }
+    if candidate.source_offline {
+        return wait("waiting: its current location is offline".to_owned());
+    }
+    if candidate.idle.is_none_or(|idle| idle < candidate.wanted) {
+        return wait(format!(
+            "waiting: idle {} of the {} the label asks for",
+            duration(candidate.idle.unwrap_or(0.0)),
+            duration(candidate.wanted)
+        ));
+    }
+    if candidate.moving {
+        return Verdict::Moving;
+    }
+    if candidate.queue_busy {
+        return wait(format!(
+            "queued: one move at a time{}",
+            candidate
+                .moving_name
+                .map(|name| format!(", {name} is moving"))
+                .unwrap_or_default()
+        ));
+    }
+    Verdict::Move
+}
+
 /// What one torrent on a target should have done to it this pass.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Hold {
@@ -459,6 +558,129 @@ mod tests {
             {"name": "relative", "path": "mnt/rel"},
         ]})))
         .usable()
+    }
+
+    fn ready() -> Candidate<'static> {
+        Candidate {
+            target: "s4",
+            online: true,
+            finished: true,
+            errored: false,
+            banned: false,
+            source_offline: false,
+            idle: Some(7200.0),
+            wanted: 3600.0,
+            moving: false,
+            queue_busy: false,
+            moving_name: None,
+        }
+    }
+
+    #[test]
+    fn a_quiet_finished_torrent_with_its_target_up_moves() {
+        assert_eq!(decide(&ready()), Verdict::Move);
+        // Zero hours means as soon as it finishes, even with no transfer yet.
+        let at_once = Candidate {
+            idle: Some(0.0),
+            wanted: 0.0,
+            ..ready()
+        };
+        assert_eq!(decide(&at_once), Verdict::Move);
+    }
+
+    #[test]
+    fn every_reason_to_wait_says_so() {
+        let says = |candidate: Candidate, expected: &str| match decide(&candidate) {
+            Verdict::Wait(note) => assert!(note.contains(expected), "{note:?} lacks {expected:?}"),
+            other => panic!("expected a wait about {expected:?}, got {other:?}"),
+        };
+        says(
+            Candidate {
+                online: false,
+                ..ready()
+            },
+            "s4 is offline",
+        );
+        says(
+            Candidate {
+                finished: false,
+                ..ready()
+            },
+            "not finished",
+        );
+        says(
+            Candidate {
+                errored: true,
+                ..ready()
+            },
+            "in error",
+        );
+        says(
+            Candidate {
+                banned: true,
+                ..ready()
+            },
+            "banned",
+        );
+        says(
+            Candidate {
+                source_offline: true,
+                ..ready()
+            },
+            "current location is offline",
+        );
+        says(
+            Candidate {
+                idle: Some(600.0),
+                ..ready()
+            },
+            "idle 10m of the 1h 0m",
+        );
+        says(
+            Candidate {
+                idle: None,
+                ..ready()
+            },
+            "idle 0s of the 1h 0m",
+        );
+        says(
+            Candidate {
+                queue_busy: true,
+                moving_name: Some("x.iso"),
+                ..ready()
+            },
+            "x.iso is moving",
+        );
+    }
+
+    #[test]
+    fn the_first_thing_to_fix_is_the_one_shown() {
+        // Offline and not finished: the target is what somebody can act on.
+        let both = Candidate {
+            online: false,
+            finished: false,
+            ..ready()
+        };
+        assert_eq!(
+            decide(&both),
+            Verdict::Wait("waiting: s4 is offline".to_owned())
+        );
+        // A torrent already moving is not "queued" behind itself.
+        let mine = Candidate {
+            moving: true,
+            queue_busy: true,
+            ..ready()
+        };
+        assert_eq!(decide(&mine), Verdict::Moving);
+    }
+
+    #[test]
+    fn durations_read_like_a_person_wrote_them() {
+        assert_eq!(duration(30.0), "30s");
+        assert_eq!(duration(45.0 * 60.0), "45m");
+        assert_eq!(duration(2.0 * 3600.0 + 600.0), "2h 10m");
+        assert_eq!(duration(3.0 * 86400.0 + 4.0 * 3600.0), "3d 4h");
+        assert_eq!(duration(-5.0), "0s");
     }
 
     #[test]
@@ -570,6 +792,10 @@ mod tests {
         assert!(!is_remote("ext4"));
         assert!(!is_remote("overlay"));
         assert!(!is_remote("xfs"));
+        assert!(!is_remote("fuseblk"), "ntfs-3g on a local disk");
+        assert!(!is_remote("fuse"));
+        assert!(is_remote("fuse.sshfs"));
+        assert!(is_remote("smb3"));
 
         assert!(!probe_blocking("/definitely/not/here"));
     }

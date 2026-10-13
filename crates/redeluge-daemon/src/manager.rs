@@ -699,6 +699,16 @@ fn enforce_seeding_rules<F: Fn(Event)>(state: &mut SessionState, emit: &F) {
     if state.session_paused {
         return;
     }
+    // Every five seconds on the session thread itself, and most torrents carry
+    // no ratio rule at all: a status sweep of the whole library to find none
+    // was the most frequent thing this daemon did.
+    if !state
+        .torrents
+        .values()
+        .any(|torrent| torrent.options.stop_at_ratio && torrent.options.is_finished)
+    {
+        return;
+    }
 
     let mut pause = Vec::new();
     let mut remove = Vec::new();
@@ -885,12 +895,16 @@ fn handle_alert<F: Fn(Event)>(state: &mut SessionState, alert: &Alert, emit: &F)
                     // Copied into the mount, which is rclone's cache: the
                     // upload starts now. The archive's next pass says whether
                     // it is still going (with rclone's rc) or done.
-                    if torrent.archive_state
-                        == Some(crate::features::archive::ArchiveState::Archiving)
-                    {
-                        torrent.archive_state =
-                            Some(crate::features::archive::ArchiveState::Syncing);
-                    }
+                    // Any other move took it off where it was: back to local
+                    // disk, or to another target. Unknown until the archive's
+                    // next pass looks, which beats "Archived" on a torrent
+                    // that is now local.
+                    torrent.archive_state = match torrent.archive_state {
+                        Some(crate::features::archive::ArchiveState::Archiving) => {
+                            Some(crate::features::archive::ArchiveState::Syncing)
+                        }
+                        _ => None,
+                    };
                     state.dirty = true;
                 }
                 emit(Event::TorrentStorageMoved {

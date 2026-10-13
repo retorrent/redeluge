@@ -196,6 +196,20 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
             ),
             style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });
+        // Not under the switch above: it is for when this label does not
+        // archive, which is exactly when that switch is off.
+        this.fields.restore_local = archive.add({
+            xtype: 'checkbox',
+            hideLabel: true,
+            boxLabel: _('Bring archived torrents back to local disk'),
+        });
+        archive.add({
+            xtype: 'label',
+            text: _(
+                'When Archive is off for this label, its torrents that are on an archive are moved back to its completed folder (or the download folder), one at a time and only if there is room. Off, they stay on the archive and keep seeding from there.'
+            ),
+            style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
+        });
 
         // Not a group either: it governs nothing, it refuses. A switch with
         // fields under it would suggest there is something to configure, and

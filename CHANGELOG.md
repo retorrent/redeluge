@@ -8,7 +8,7 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
-## [Unreleased]
+## [1.10.2] — 2026-10-13
 
 ### Changed
 
@@ -23,12 +23,48 @@ may refuse the new one.
 
 ### Added
 
+- **Bringing archived torrents back.** A label has *Bring archived torrents
+  back to local disk* (`restore_local`, off by default): when the label does
+  not archive, its torrents on an archive move back to its completed folder or
+  the download folder, one at a time and only if there is room. Off, a torrent
+  moved to a label that does not archive stays on the archive and says so
+  (*stays there* in its *Archive* column). Off by default because tracker
+  rules relabel torrents on their own, and that must not pull an archive back
+  onto a small disk unasked. A torrent moved to a label that archives
+  somewhere else follows it there.
 - **Why a torrent is not archived yet.** Each torrent whose label archives
   shows what it is waiting for — the download to finish, being idle long
   enough (`idle 2h 10m of the 3d 0h the label asks for`), another move, the
   target being offline, room at the destination — or that the label has
   Archive on with no target chosen. *Waiting* in the *Archive* column, with
   the reason on hover and in the *Status* tab (`archive_note`).
+
+### Performance
+
+- **Background rules no longer sweep the whole library to do nothing.** The
+  idle rule (every 5 s, off by default) only takes a status snapshot once it
+  is known to be on; the share-ratio rule (every 5 s) skips the sweep when no
+  torrent has a ratio limit; the archive rule (every 15 s) does nothing without
+  targets or a label that archives; the disk-space rule (every 15 s) takes one
+  snapshot per pass instead of two. On a large library these sweeps were most
+  of what the daemon did between alerts.
+- The storage window counts torrents per path in one pass, and every call to
+  rclone's rc shares one HTTP client.
+
+### Fixed
+
+- A target is no longer taken for a network mount when it is on `fuseblk`
+  (ntfs-3g and other local FUSE disks); only `fuse.<program>` and network
+  filesystems count.
+- A torrent moved back from an archive no longer shows *Archived* until the
+  next pass.
+
+### Tests
+
+- The archive's move decision is a pure function with its own tests, and
+  `tests/archive.rs` covers a restart while a target is down: the torrent is
+  held paused, its files cannot be deleted, and the storage and archive
+  reports still answer.
 
 ## [1.10.1] — 2026-10-13
 
