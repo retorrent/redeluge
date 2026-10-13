@@ -8,6 +8,28 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [Unreleased]
+
+### Changed
+
+- **A label's archive target is picked from a list** of the targets in
+  Preferences, Archive, instead of typed. A name that matched no target left
+  the rule doing nothing, silently.
+- **The progress bar says what the archive is doing**: *Moving to archive*
+  from the moment the move starts, then *Uploading to archive* until rclone has
+  sent everything, then *Remote Seed*. The move used to show only at the
+  archive's next pass, by which time a small torrent was already copied. The
+  *Archive* column now sits next to *Progress*.
+
+### Added
+
+- **Why a torrent is not archived yet.** Each torrent whose label archives
+  shows what it is waiting for — the download to finish, being idle long
+  enough (`idle 2h 10m of the 3d 0h the label asks for`), another move, the
+  target being offline, room at the destination — or that the label has
+  Archive on with no target chosen. *Waiting* in the *Archive* column, with
+  the reason on hover and in the *Status* tab (`archive_note`).
+
 ## [1.10.1] — 2026-10-13
 
 ### Fixed

@@ -216,6 +216,8 @@ pub struct Torrent {
     pub archive_state: Option<crate::features::archive::ArchiveState>,
     /// When a torrent held after an error on its target may be tried again.
     pub archive_retry_at: f64,
+    /// Why its label's archive rule has not moved it yet, or empty.
+    pub archive_note: String,
 }
 
 /// Which status keys a caller asked for.
@@ -260,6 +262,7 @@ impl Torrent {
             content_id: None,
             archive_state: None,
             archive_retry_at: 0.0,
+            archive_note: String::new(),
         }
     }
 
@@ -336,6 +339,9 @@ impl Torrent {
             put("name", Value::Str(self.display_name(status)));
         }
         put("state", Value::Str(state.to_string()));
+        if keys.wants("archive_note") {
+            put("archive_note", Value::Str(self.archive_note.clone()));
+        }
         if keys.wants("archive_state") {
             put(
                 "archive_state",

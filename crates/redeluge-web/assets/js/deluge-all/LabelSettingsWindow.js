@@ -164,12 +164,25 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
             _('Archive quiet torrents'),
             _('Archive')
         );
+        // A list, not free text: a target that does not exist would leave
+        // the rule silently doing nothing. Filled from Preferences, Archive
+        // each time the window opens.
+        this.archiveTargets = new Ext.data.ArrayStore({
+            fields: ['name'],
+            data: [],
+        });
         this.fields.archive_target = archive.add({
-            xtype: 'textfield',
+            xtype: 'combo',
             fieldLabel: _('To target:'),
             labelSeparator: '',
             width: 160,
-            emptyText: _('a name from Preferences, Archive'),
+            mode: 'local',
+            triggerAction: 'all',
+            editable: false,
+            store: this.archiveTargets,
+            valueField: 'name',
+            displayField: 'name',
+            emptyText: _('choose a target'),
         });
         this.fields.archive_after_hours = archive.add({
             xtype: 'durationfield',
@@ -393,6 +406,27 @@ Deluge.LabelSettingsWindow = Ext.extend(Deluge.SectionedWindow, {
         this.setOptions({});
         this.load();
         this.loadArr();
+        this.loadTargets();
+    },
+
+    /** The archive targets the target list offers. */
+    loadTargets: function () {
+        deluge.client.core.get_config_value('archive', {
+            success: function (settings) {
+                var rows = [];
+                Ext.each((settings && settings['targets']) || [], function (t) {
+                    if (t && t.name) rows.push([t.name]);
+                });
+                this.archiveTargets.loadData(rows);
+                var field = this.fields.archive_target;
+                field.emptyText = rows.length
+                    ? _('choose a target')
+                    : _('none yet: add one in Preferences, Archive');
+                // Redrawn against the list now that it is there.
+                field.setValue(field.getValue());
+            },
+            scope: this,
+        });
     },
 
     loadArr: function () {

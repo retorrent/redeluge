@@ -1452,6 +1452,7 @@ async fn start_move(core: &Core, candidate: &TrackerMove, at: f64) -> bool {
 
     let id = candidate.id.clone();
     let to = candidate.to.clone();
+    let archiving = candidate.which == rule::ARCHIVE;
     let started = core
         .manager
         .with(move |state| {
@@ -1461,6 +1462,12 @@ async fn start_move(core: &Core, candidate: &TrackerMove, at: f64) -> bool {
                 // with the alert that updates the save path.
                 if let Some(torrent) = state.torrents.get_mut(&id) {
                     torrent.moving_to = Some(to);
+                    // Now, not at the archive's next pass: a small torrent is
+                    // copied into the mount's cache in less than that.
+                    if archiving {
+                        torrent.archive_state =
+                            Some(crate::features::archive::ArchiveState::Archiving);
+                    }
                 }
             }
             outcome
@@ -1856,6 +1863,16 @@ async fn keep_archives(core: Arc<Core>) {
             if start_move(&core, &candidate, at).await {
                 break;
             }
+            let id = candidate.id.clone();
+            let note = format!("waiting: not enough room at {} to move it", candidate.to);
+            core.manager
+                .with(move |state| {
+                    if let Some(torrent) = state.torrents.get_mut(&id) {
+                        torrent.archive_note = note;
+                    }
+                })
+                .await
+                .ok();
         }
     }
 }
@@ -1986,62 +2003,117 @@ fn sweep_archives(
     }
 
     // ------------------------------------------------------------- moves
-    if !moving_now {
-        for status in &statuses {
-            let Some(torrent) = state.torrents.get(&status.info_hash) else {
-                continue;
-            };
-            let Some((name, hours)) = labels
-                .options(&torrent.options.label)
-                .and_then(|options| options.archive_rule())
-            else {
-                continue;
-            };
-            let Some(target) = targets.iter().find(|target| target.name == name) else {
-                warn_once(
-                    &format!("archive target {name}"),
-                    &format!(
-                        "label {} archives to {name}, which is not a target",
-                        torrent.options.label
-                    ),
-                );
-                continue;
-            };
-            let up = online[index_of(target).unwrap_or(0)];
-            let finished = tracker::finished_at(status.completed_time, status.added_time, false);
-            let quiet = archive::idle_seconds(
-                status.time_since_download,
-                status.time_since_upload,
-                finished,
-                now,
-            )
-            .is_some_and(|idle| idle >= hours * 3600.0);
+    // Every torrent a label wants archived gets a move, or a note saying what
+    // it is waiting for: "nothing happens" is not something to leave somebody
+    // to work out from the source.
+    let moving_name = statuses
+        .iter()
+        .find(|status| {
+            status.moving_storage
+                || state
+                    .torrents
+                    .get(&status.info_hash)
+                    .is_some_and(|torrent| torrent.moving_to.is_some())
+        })
+        .map(|status| status.name.clone());
+    let mut notes: Vec<(String, String)> = Vec::new();
+    for status in &statuses {
+        let Some(torrent) = state.torrents.get(&status.info_hash) else {
+            continue;
+        };
+        let options = labels.options(&torrent.options.label);
+        // Switched on with no target: the one way to set the rule up that
+        // would otherwise do nothing at all, silently.
+        if options.is_some_and(|options| {
+            options.apply_archive && options.archive_target.trim().is_empty()
+        }) {
+            notes.push((
+                status.info_hash.clone(),
+                format!(
+                    "not archived: label {} has Archive on but no target chosen",
+                    torrent.options.label
+                ),
+            ));
+            continue;
+        }
+        let Some((name, hours)) = options.and_then(|options| options.archive_rule()) else {
+            continue;
+        };
+        let Some(target) = targets.iter().find(|target| target.name == name) else {
+            notes.push((
+                status.info_hash.clone(),
+                format!(
+                    "label {} archives to {name}, which is not a target in Preferences, Archive",
+                    torrent.options.label
+                ),
+            ));
+            continue;
+        };
+        if archive::is_under(&status.save_path, &target.path) {
+            continue;
+        }
+        let up = online[index_of(target).unwrap_or(0)];
+        let finished = tracker::finished_at(status.completed_time, status.added_time, false);
+        let idle = archive::idle_seconds(
+            status.time_since_download,
+            status.time_since_upload,
+            finished,
+            now,
+        );
+        let wanted = hours * 3600.0;
 
-            if up
-                && quiet
-                && status.is_finished
-                && status.has_metadata
-                && status.error.is_none()
-                && !status.moving_storage
-                && torrent.moving_to.is_none()
-                && !state.banned.contains(&status.info_hash)
-                && !archive::is_under(&status.save_path, &target.path)
-                && !state.on_offline_archive(&status.save_path)
-            {
-                work.moves.push(TrackerMove {
-                    id: status.info_hash.clone(),
-                    name: status.name.clone(),
-                    host: torrent.options.label.clone(),
-                    from: status.save_path.clone(),
-                    to: target.path.clone(),
-                    size: status.total_wanted.max(status.total_done),
-                    which: rule::ARCHIVE,
-                    detail: format!(
-                        "label {} archives quiet torrents to {}",
-                        torrent.options.label, target.name
-                    ),
-                });
-            }
+        let waiting = if !up {
+            Some(format!("waiting: {} is offline", target.name))
+        } else if !status.is_finished || !status.has_metadata {
+            Some("waiting: the download is not finished".to_owned())
+        } else if status.error.is_some() {
+            Some("waiting: the torrent is in error".to_owned())
+        } else if state.banned.contains(&status.info_hash) {
+            Some("not archived: the torrent is banned".to_owned())
+        } else if state.on_offline_archive(&status.save_path) {
+            Some("waiting: its current location is offline".to_owned())
+        } else if idle.is_none_or(|idle| idle < wanted) {
+            Some(format!(
+                "waiting: idle {} of the {} the label asks for",
+                describe_seconds(idle.unwrap_or(0.0)),
+                describe_seconds(wanted)
+            ))
+        } else if status.moving_storage || torrent.moving_to.is_some() {
+            None
+        } else if moving_now || !work.moves.is_empty() {
+            Some(format!(
+                "queued: one move at a time{}",
+                moving_name
+                    .as_ref()
+                    .map(|name| format!(", {name} is moving"))
+                    .unwrap_or_default()
+            ))
+        } else {
+            work.moves.push(TrackerMove {
+                id: status.info_hash.clone(),
+                name: status.name.clone(),
+                host: torrent.options.label.clone(),
+                from: status.save_path.clone(),
+                to: target.path.clone(),
+                size: status.total_wanted.max(status.total_done),
+                which: rule::ARCHIVE,
+                detail: format!(
+                    "label {} archives quiet torrents to {}",
+                    torrent.options.label, target.name
+                ),
+            });
+            None
+        };
+        if let Some(note) = waiting {
+            notes.push((status.info_hash.clone(), note));
+        }
+    }
+    for torrent in state.torrents.values_mut() {
+        torrent.archive_note.clear();
+    }
+    for (id, note) in notes {
+        if let Some(torrent) = state.torrents.get_mut(&id) {
+            torrent.archive_note = note;
         }
     }
 
@@ -2490,6 +2562,18 @@ fn describe_delay(hours: f64) -> String {
         return "for an hour".to_owned();
     }
     format!("for {} hours", trim_number(hours))
+}
+
+/// A duration for a person: `3d 4h`, `2h 10m`, `45m`, `30s`.
+fn describe_seconds(seconds: f64) -> String {
+    let seconds = seconds.max(0.0) as u64;
+    let (days, hours, minutes) = (seconds / 86_400, seconds / 3600 % 24, seconds / 60 % 60);
+    match (days, hours, minutes) {
+        (0, 0, 0) => format!("{seconds}s"),
+        (0, 0, m) => format!("{m}m"),
+        (0, h, m) => format!("{h}h {m}m"),
+        (d, h, _) => format!("{d}d {h}h"),
+    }
 }
 
 /// A number without the trailing zeroes a float prints, so a history line says
@@ -3372,6 +3456,14 @@ mod tests {
             .iter()
             .map(|word| tracker_news(&mut reported, "tracker.example.com", word))
             .collect()
+    }
+
+    #[test]
+    fn durations_read_like_a_person_wrote_them() {
+        assert_eq!(describe_seconds(30.0), "30s");
+        assert_eq!(describe_seconds(45.0 * 60.0), "45m");
+        assert_eq!(describe_seconds(2.0 * 3600.0 + 600.0), "2h 10m");
+        assert_eq!(describe_seconds(3.0 * 86400.0 + 4.0 * 3600.0), "3d 4h");
     }
 
     #[test]

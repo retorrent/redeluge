@@ -882,6 +882,15 @@ fn handle_alert<F: Fn(Event)>(state: &mut SessionState, alert: &Alert, emit: &F)
                 if let Some(torrent) = state.torrents.get_mut(&id) {
                     torrent.moving_to = None;
                     torrent.options.save_path = Some(path.to_owned());
+                    // Copied into the mount, which is rclone's cache: the
+                    // upload starts now. The archive's next pass says whether
+                    // it is still going (with rclone's rc) or done.
+                    if torrent.archive_state
+                        == Some(crate::features::archive::ArchiveState::Archiving)
+                    {
+                        torrent.archive_state =
+                            Some(crate::features::archive::ArchiveState::Syncing);
+                    }
                     state.dirty = true;
                 }
                 emit(Event::TorrentStorageMoved {

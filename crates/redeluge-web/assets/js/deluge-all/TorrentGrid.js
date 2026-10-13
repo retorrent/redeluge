@@ -15,32 +15,36 @@
         return value == -1 ? '' : value + 1;
     }
     /**
-     * Seeding from an archive mount rather than the local disk. Only how it
-     * is drawn: the daemon still says `Seeding`, which is what every client
-     * and *arr understands.
+     * What the archive is doing with a torrent, in words for the progress
+     * bar, or nothing when its files are simply local. Only how it is drawn:
+     * the daemon's `state` stays `Seeding` or `Paused`, which is what every
+     * client and *arr understands.
      */
-    function isRemoteSeed(r) {
+    function archiveLabel(r) {
         var archive = r.data['archive_state'];
-        return (
-            r.data['state'] === 'Seeding' &&
-            (archive === 'archived' || archive === 'syncing')
-        );
+        if (archive === 'offline') return _('Remote Error');
+        if (archive === 'archiving') return _('Moving to archive');
+        if (r.data['state'] !== 'Seeding') return null;
+        if (archive === 'syncing') return _('Uploading to archive');
+        if (archive === 'archived') return _('Remote Seed');
+        return null;
     }
-    /**
-     * Held because its archive does not answer. The daemon says `Paused`.
-     */
-    function isRemoteError(r) {
-        return r.data['archive_state'] === 'offline';
+    /** Which icon: the error one in orange, or the seeding one in cyan. */
+    function archiveIcon(r) {
+        var archive = r.data['archive_state'];
+        if (archive === 'offline') return 'remoteerror';
+        if (archive === 'archiving' || archive === 'syncing' || archive === 'archived') {
+            return r.data['state'] === 'Seeding' || archive === 'archiving'
+                ? 'remoteseed'
+                : null;
+        }
+        return null;
     }
     function torrentNameRenderer(value, p, r) {
         // `state` is what picks the icon. A record without it used to throw
         // here, and a renderer that throws stops the grid's render loop, so
         // one torrent in an unexpected state emptied every row after it.
-        var state = isRemoteError(r)
-            ? 'remoteerror'
-            : isRemoteSeed(r)
-              ? 'remoteseed'
-              : String(r.data['state'] || '').toLowerCase();
+        var state = archiveIcon(r) || String(r.data['state'] || '').toLowerCase();
         return String.format(
             '<div class="torrent-name x-deluge-{0}">{1}</div>',
             state.replace(/[^a-z0-9_-]/g, ''),
@@ -60,11 +64,7 @@
         // nothing rather than throwing out of the render loop.
         if (value === undefined || value === null) return '';
         value = new Number(value);
-        var label = isRemoteError(r)
-            ? _('Remote Error')
-            : isRemoteSeed(r)
-              ? _('Remote Seed')
-              : _(r.data['state'] || '');
+        var label = archiveLabel(r) || _(r.data['state'] || '');
         var text = label + ' ' + value.toFixed(2) + '%';
         // The old form indexed the result of a regex match without checking
         // it, so a column whose style carried no width threw from inside the
@@ -225,6 +225,30 @@
                 sortable: true,
                 renderer: torrentProgressRenderer,
                 dataIndex: 'progress',
+            },
+            {
+                header: _('Archive'),
+                width: 90,
+                sortable: true,
+                renderer: function (value, p, r) {
+                    var shown = {
+                        archiving: _('Moving'),
+                        syncing: _('Uploading'),
+                        archived: _('Archived'),
+                        offline: _('Offline'),
+                    }[value];
+                    if (shown) return shown;
+                    // Its label wants it archived and something is in the
+                    // way: say so, with the reason on hover.
+                    var note = r.data['archive_note'];
+                    if (!note) return '';
+                    return String.format(
+                        '<span ext:qtip="{0}" style="opacity: 0.8;">{1}</span>',
+                        Ext.util.Format.htmlEncode(note),
+                        /^not /.test(note) ? _('Not archived') : _('Waiting')
+                    );
+                },
+                dataIndex: 'archive_state',
             },
             {
                 header: _('Seeds'),
@@ -431,22 +455,6 @@
                 renderer: ftime,
                 dataIndex: 'time_since_transfer',
             },
-            {
-                header: _('Archive'),
-                width: 90,
-                sortable: true,
-                renderer: function (value) {
-                    return (
-                        {
-                            archiving: _('Moving'),
-                            syncing: _('Uploading'),
-                            archived: _('Archived'),
-                            offline: _('Offline'),
-                        }[value] || ''
-                    );
-                },
-                dataIndex: 'archive_state',
-            },
         ],
 
         meta: {
@@ -491,6 +499,7 @@
                 { name: 'tracker_remove_at', type: 'float' },
                 { name: 'space_paused', type: 'bool' },
                 { name: 'archive_state' },
+                { name: 'archive_note' },
             ],
         },
 
