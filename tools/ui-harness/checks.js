@@ -275,7 +275,7 @@
         // a hidden card measured nothing and drew nothing: every delay but
         // the first section's went missing.
         [
-            ['label', Deluge.LabelSettingsWindow, 1],
+            ['label', Deluge.LabelSettingsWindow, 2],
             ['tracker', Deluge.TrackerSettingsWindow, 4],
         ].forEach(function (spec) {
             var window_ = new spec[1]();

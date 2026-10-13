@@ -405,11 +405,11 @@ fn every_delay_is_entered_as_days_and_hours() {
         text.contains("Ext.reg('durationfield'"),
         "the duration field is not in the bundle"
     );
-    // Four tracker rules, the label's stuck rule and the daemon's own: six
-    // delays, none of them a lone hours box any more.
+    // Four tracker rules, the label's stuck and archive rules and the
+    // daemon's own stuck rule: seven delays, none of them a lone hours box.
     assert_eq!(
         text.matches("xtype: 'durationfield'").count(),
-        6,
+        7,
         "a delay went back to being entered in hours alone"
     );
 }
