@@ -815,6 +815,10 @@ fn move_on_completion(state: &mut SessionState, id: &str) {
     if !torrent.options.move_completed {
         return;
     }
+    // One the archive holds or is taking is the archive's to place.
+    if torrent.archive_state.is_some() || torrent.archive_target.is_some() {
+        return;
+    }
     let Some(destination) = torrent.options.move_completed_path.clone() else {
         return;
     };

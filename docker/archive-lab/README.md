@@ -18,6 +18,16 @@ console on <http://127.0.0.1:19001>.
 `seed` adds two fake ISOs under the labels `isos` (target `s3a`, `/mnt/a`) and
 `films` (target `s3b`, `/mnt/b`), both archiving as soon as they finish.
 
+## Rule interactions
+
+```bash
+docker compose exec lab python3 /src/docker/archive-lab/scenarios.py
+```
+
+Plays the archive against the tracker move, label and removal rules and the
+*bring back* option, and checks each outcome. It rewrites the lab's tracker,
+label and archive settings.
+
 ## Outages
 
 | What | How |

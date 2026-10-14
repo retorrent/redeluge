@@ -115,6 +115,15 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                                     scope: this,
                                 },
                                 {
+                                    // What the rules would do to a torrent,
+                                    // from its label and its tracker.
+                                    text: _('Rule Explorer'),
+                                    iconCls: 'icon-label',
+                                    handler: function () {
+                                        Deluge.RuleExplorerWindow.open();
+                                    },
+                                },
+                                {
                                     // What is on disk that no torrent
                                     // accounts for.
                                     text: _('Cleanup'),

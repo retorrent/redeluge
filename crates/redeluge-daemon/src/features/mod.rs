@@ -984,11 +984,16 @@ async fn apply_tracker_rules(core: Arc<Core>) {
         // A label can forbid the removals below, and the label wins: see
         // `label::Options::never_remove`.
         let labels = label::Settings::from_config(setting(&core, "label").await.as_ref());
+        // Where the archive keeps torrents: a move rule leaves those alone.
+        let archive_targets =
+            archive::Settings::from_config(setting(&core, "archive").await.as_ref()).usable();
 
         let now = now();
         let work = match core
             .manager
-            .with(move |state| decide_tracker_work(state, &settings, &labels, now))
+            .with(move |state| {
+                decide_tracker_work(state, &settings, &labels, &archive_targets, now)
+            })
             .await
         {
             Ok(work) => work,
@@ -1273,6 +1278,7 @@ fn decide_tracker_work(
     state: &mut crate::manager::SessionState,
     settings: &tracker::Settings,
     labels: &label::Settings,
+    archive_targets: &[archive::Target],
     now: f64,
 ) -> TrackerWork {
     let mut work = TrackerWork::default();
@@ -1363,6 +1369,13 @@ fn decide_tracker_work(
             && status.save_path.trim_end_matches('/') != options.move_path.trim_end_matches('/')
             && !state.on_offline_archive(&status.save_path)
             && !state.on_offline_archive(&options.move_path)
+            // Not one already being moved by anything, and not one on an
+            // archive: the archive owns where those live. Without this the
+            // two rules took turns — the tracker's brought an archived torrent
+            // back, which deleted it from the mount and cancelled rclone's
+            // upload, and the archive sent it out again, for ever.
+            && torrent.moving_to.is_none()
+            && archive::target_of(&status.save_path, archive_targets).is_none()
         {
             moving = true;
             work.moves.push(RuleMove {

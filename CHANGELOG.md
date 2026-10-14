@@ -8,6 +8,32 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.10.6] — 2026-10-14
+
+### Fixed
+
+- **A tracker's move rule and the archive moved the same torrent back and
+  forth for ever.** The tracker rule saw an archived torrent outside its own
+  folder and brought it back, which deleted it from the mount and cancelled
+  rclone's upload (*upload canceled*, *removed cache file as file deleted*,
+  and no *Sync Error*, because nothing had failed); the archive then sent it
+  out again. A tracker's move rule now leaves alone a torrent that is on an
+  archive or already being moved, and a label's move-on-completion never
+  touches one the archive holds.
+
+### Added
+
+- **Rule Explorer**, in *Tools*: pick the label a torrent arrives with and the
+  tracker it comes from, and it lays out its life — arriving, downloading,
+  finishing, archiving, going — with every rule that acts on it, who sets it
+  and when it fires. It follows a tracker rule that moves it into another
+  label, and warns when that costs it a label's *never remove*.
+- `docker/archive-lab/scenarios.py`: the archive against every other rule
+  that moves, labels or removes torrents, checked automatically — where the
+  torrent ends up, how many times it moved, and that rclone never had a file
+  deleted under an upload. The move-rule scenario fails on 1.10.5 and passes
+  now.
+
 ## [1.10.5] — 2026-10-14
 
 ### Added
