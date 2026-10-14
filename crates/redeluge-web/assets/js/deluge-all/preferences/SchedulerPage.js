@@ -71,7 +71,7 @@ Deluge.preferences.Scheduler = Ext.extend(Ext.Panel, {
             border: false,
             title: _('Slow Settings'),
             autoHeight: true,
-            labelWidth: 200,
+            labelWidth: 250,
             defaultType: 'spinnerfield',
             style: 'padding-top: 5px; margin-bottom: 0px;',
         });

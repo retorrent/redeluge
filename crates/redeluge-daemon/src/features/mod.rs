@@ -2093,6 +2093,9 @@ fn sweep_archives(
             .as_deref()
             .and_then(|to| archive::target_of(to, targets));
 
+        // Where it is going wins over where it is: a move onto a target says
+        // that target from its first second.
+        torrent.archive_target = going.or(here).map(|target| target.name.clone());
         torrent.archive_state = match (here, going) {
             (_, Some(going)) if here.map(|h| &h.path) != Some(&going.path) => {
                 Some(ArchiveState::Archiving)
@@ -3490,7 +3493,13 @@ async fn follow_schedule(core: Arc<Core>) {
             record(
                 &core,
                 Action::new(rule::SCHEDULE, did::CHANGED, now())
-                    .detail(format!("the schedule moved to {}", state.as_str())),
+                    // In the words of the schedule's own legend, not the
+                    // plugin's colour names.
+                    .detail(match state {
+                        scheduler::State::Full => "the schedule switched to full speed",
+                        scheduler::State::Slow => "the schedule switched to slow",
+                        scheduler::State::Stopped => "the schedule stopped transfers",
+                    }),
             );
             apply_schedule(&core, &settings, state).await;
             current = Some(state);

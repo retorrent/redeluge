@@ -8,6 +8,35 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [Unreleased]
+
+### Changed
+
+- **A pass over the interface's wording and layout**, checked page by page in
+  a browser with a script that flags any label on two lines or any text cut
+  short — nothing is left:
+  - The *Status* tab has an **Archive** row of its own, the whole width: where
+    the files are (*on s4, seeding from the archive*, *on local disk*) and
+    what the archive is waiting for, in full. *Disk Space* is about disk space
+    again. Labels no longer run into their values (*Next Announce:55s*), and a
+    value too long for its column ends in an ellipsis and shows in full on
+    hover.
+  - *Details* says **Location** instead of *Download Folder*, and for a torrent
+    on an archive gives the target's name: *s4 (archive) — /mnt/s4/data*.
+  - Progress reads *Remote Seed 100%* rather than a cut-off *Remote Seed
+    100.00*; a finished torrent shows no decimals, and the column is wider.
+  - Preferences is larger (820 × 600) and every page's labels fit on one line:
+    Downloads, Archive, Network, Bandwidth, Interface, Other, Queue, Watched
+    Folders, Feeds and Schedule all had some that wrapped. The Archive page's
+    limits are *Copies at once (all targets)* and *Uploads at once, per
+    target*, with plainer help.
+  - The label list's *Applies* mentions archiving (*archives to s4 after 3d
+    idle*).
+  - *Storage* calls the local disk *Local disk*; *Activity* is wider and wraps
+    the reason instead of cutting it; a schedule change reads *switched to
+    full speed* rather than *moved to Green*.
+  - A torrent's *Options* tab keeps its labels on one line.
+
 ## [1.10.4] — 2026-10-14
 
 ### Fixed

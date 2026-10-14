@@ -28,6 +28,7 @@ Deluge.preferences.Rss = Ext.extend(Ext.form.FormPanel, {
                 title: _('Feeds'),
                 header: false,
                 layout: 'form',
+                labelWidth: 170,
                 autoScroll: true,
             },
             config

@@ -37,7 +37,7 @@ Deluge.preferences.Archive = Ext.extend(Ext.form.FormPanel, {
         fieldset.add({
             xtype: 'label',
             text: _(
-                'One per line: name | mount path | rclone rc URL (optional, http://user:pass@host:5572). A label picks its target in its own settings.'
+                'One target per line: name | mount path | rclone rc URL. The rc URL is optional (http://user:password@host:5572); with it, redeluge knows when an upload has finished. Each label chooses its target in its own settings.'
             ),
             style: 'display: block; margin-bottom: 6px; opacity: 0.72;',
         });
@@ -55,11 +55,11 @@ Deluge.preferences.Archive = Ext.extend(Ext.form.FormPanel, {
             border: false,
             title: _('Limits'),
             autoHeight: true,
-            labelWidth: 220,
+            labelWidth: 250,
         });
         this.maxMoves = fieldset.add({
             xtype: 'spinnerfield',
-            fieldLabel: _('Torrents copied at once:'),
+            fieldLabel: _('Copies at once (all targets):'),
             labelSeparator: '',
             width: 60,
             value: 1,
@@ -69,7 +69,7 @@ Deluge.preferences.Archive = Ext.extend(Ext.form.FormPanel, {
         });
         this.maxUploads = fieldset.add({
             xtype: 'spinnerfield',
-            fieldLabel: _('On their way to each target at once:'),
+            fieldLabel: _('Uploads at once, per target:'),
             labelSeparator: '',
             width: 60,
             value: 0,
@@ -80,7 +80,7 @@ Deluge.preferences.Archive = Ext.extend(Ext.form.FormPanel, {
         fieldset.add({
             xtype: 'label',
             text: _(
-                'Copied: torrents moving into or out of an archive, all targets together. Each copy goes through the local disk. On their way: per target, torrents being copied in or still being uploaded by rclone (needs its rc URL); 0 for no limit. rclone\'s own --transfers still caps how many files it sends at once.'
+                'Copies at once: how many torrents are copied into or out of archives at the same time, all targets together; each copy goes through the local disk. Uploads at once, per target: how many torrents may be on their way to one target, being copied or still uploading; 0 for no limit.'
             ),
             style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
         });

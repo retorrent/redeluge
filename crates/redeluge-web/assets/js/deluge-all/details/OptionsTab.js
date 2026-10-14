@@ -67,7 +67,7 @@ Deluge.details.OptionsTab = Ext.extend(Ext.form.FormPanel, {
 
             style: 'margin-left: 10px; margin-right: 5px; padding: 5px',
             title: _('Bandwidth'),
-            width: 250,
+            width: 330,
         });
 
         /*
@@ -176,7 +176,7 @@ Deluge.details.OptionsTab = Ext.extend(Ext.form.FormPanel, {
             xtype: 'fieldset',
             title: _('Queue'),
             style: 'margin-left: 5px; margin-right: 5px; padding: 5px',
-            width: 210,
+            width: 290,
 
             layout: 'table',
             layoutConfig: { columns: 2 },
@@ -204,6 +204,7 @@ Deluge.details.OptionsTab = Ext.extend(Ext.form.FormPanel, {
             id: 'stop_at_ratio',
             width: 120,
             boxLabel: _('Stop seed at ratio:'),
+            ctCls: 'x-deluge-nowrap',
             handler: this.onStopRatioChecked,
             scope: this,
         });

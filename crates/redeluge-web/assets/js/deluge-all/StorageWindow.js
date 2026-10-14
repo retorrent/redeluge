@@ -96,7 +96,7 @@ Deluge.StorageWindow = Ext.extend(Ext.Window, {
                     renderer: this.renderBytes,
                 },
                 {
-                    header: _('Uploading'),
+                    header: _('Uploads'),
                     dataIndex: 'uploads_pending',
                     width: 70,
                     renderer: this.renderCount,
@@ -150,7 +150,9 @@ Deluge.StorageWindow = Ext.extend(Ext.Window, {
                     ? 'remoteseed'
                     : 'remoteerror'
                 : 'freespace',
-            Ext.util.Format.htmlEncode(value || '')
+            Ext.util.Format.htmlEncode(
+                archive ? value || '' : _('Local disk')
+            )
         );
     },
 

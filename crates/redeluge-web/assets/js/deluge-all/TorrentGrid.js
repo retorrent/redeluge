@@ -21,14 +21,7 @@
      * client and *arr understands.
      */
     function archiveLabel(r) {
-        var archive = r.data['archive_state'];
-        if (archive === 'offline') return _('Remote Error');
-        if (archive === 'archiving') return _('Moving to archive');
-        // Shown paused or not: the rule holds it paused while rclone uploads.
-        if (archive === 'syncing') return _('Uploading to archive');
-        if (r.data['state'] !== 'Seeding') return null;
-        if (archive === 'archived') return _('Remote Seed');
-        return null;
+        return Deluge.archiveLabel(r.data);
     }
     /** Which icon: the error one in orange, or the seeding one in cyan. */
     function archiveIcon(r) {
@@ -66,7 +59,10 @@
         if (value === undefined || value === null) return '';
         value = new Number(value);
         var label = archiveLabel(r) || _(r.data['state'] || '');
-        var text = label + ' ' + value.toFixed(2) + '%';
+        // A finished torrent says 100%, not 100.00%: the two decimals are for
+        // the ones still moving, and on the longer labels they were what got
+        // cut off.
+        var text = label + ' ' + (value >= 100 ? '100%' : value.toFixed(2) + '%');
         // The old form indexed the result of a regex match without checking
         // it, so a column whose style carried no width threw from inside the
         // grid's render loop and left the rows it had not reached blank.
@@ -222,14 +218,14 @@
             },
             {
                 header: _('Progress'),
-                width: 150,
+                width: 170,
                 sortable: true,
                 renderer: torrentProgressRenderer,
                 dataIndex: 'progress',
             },
             {
                 header: _('Archive'),
-                width: 90,
+                width: 100,
                 sortable: true,
                 renderer: function (value, p, r) {
                     var shown = {
@@ -277,7 +273,7 @@
             },
             {
                 header: _('Down Speed'),
-                width: 80,
+                width: 90,
                 sortable: true,
                 renderer: torrentSpeedRenderer,
                 dataIndex: 'download_payload_rate',
@@ -509,6 +505,7 @@
                 { name: 'space_paused', type: 'bool' },
                 { name: 'archive_state' },
                 { name: 'archive_note' },
+                { name: 'archive_target' },
             ],
         },
 

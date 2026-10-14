@@ -180,3 +180,35 @@ FILE_PRIORITY_CSS = {
     7: 'x-high-download',
     9: 'x-mixed-download',
 };
+
+/**
+ * What the archive is doing with a torrent, as the progress bar says it, or
+ * null when its files are simply local. Only how it is drawn: the daemon's
+ * `state` stays `Seeding` or `Paused`, which is what every client understands.
+ */
+Deluge.archiveLabel = function (data) {
+    var archive = data['archive_state'];
+    if (archive === 'offline') return _('Remote Error');
+    if (archive === 'archiving') return _('Moving to archive');
+    // Shown paused or not: the rule holds it paused while rclone uploads.
+    if (archive === 'syncing') return _('Uploading to archive');
+    if (data['state'] !== 'Seeding') return null;
+    if (archive === 'archived') return _('Remote Seed');
+    return null;
+};
+
+/**
+ * Where a torrent's files are, in words: the archive target's name when they
+ * are on one, the folder otherwise. `path` is the folder as the daemon has it.
+ */
+Deluge.locationText = function (data, path) {
+    var target = data['archive_target'];
+    if (!target) return path || '';
+    var where = {
+        archiving: _('moving to {0}'),
+        syncing: _('{0}, uploading'),
+        archived: _('{0} (archive)'),
+        offline: _('{0} (archive, offline)'),
+    }[data['archive_state']] || _('{0} (archive)');
+    return String.format(where, target) + (path ? ' — ' + path : '');
+};

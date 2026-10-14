@@ -27,7 +27,7 @@ Ext.ns('Deluge');
  */
 Deluge.ActivityWindow = Ext.extend(Ext.Window, {
     title: _('Activity'),
-    width: 720,
+    width: 900,
     height: 420,
     layout: 'fit',
     closeAction: 'hide',
@@ -95,7 +95,15 @@ Deluge.ActivityWindow = Ext.extend(Ext.Window, {
                     id: 'detail',
                     header: _('Why'),
                     dataIndex: 'detail',
-                    renderer: Ext.util.Format.htmlEncode,
+                    // Wrapped rather than cut: the reason is the point of
+                    // this window, and the longer ones lost their end.
+                    renderer: function (value) {
+                        return (
+                            '<div style="white-space: normal;">' +
+                            Ext.util.Format.htmlEncode(value) +
+                            '</div>'
+                        );
+                    },
                 },
             ],
         });

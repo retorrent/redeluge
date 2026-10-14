@@ -82,7 +82,7 @@ Deluge.preferences.Downloads = Ext.extend(Ext.FormPanel, {
             labelWidth: 1,
             defaultType: 'checkbox',
             style: 'margin-bottom: 0; padding-bottom: 0;',
-            width: 280,
+            width: 460,
         });
         optMan.bind(
             'prioritize_first_last_pieces',
@@ -127,7 +127,7 @@ Deluge.preferences.Downloads = Ext.extend(Ext.FormPanel, {
             autoHeight: true,
             labelWidth: 200,
             style: 'padding-top: 5px; margin-bottom: 0px;',
-            width: 300,
+            width: 460,
         });
         fieldset.add({
             xtype: 'label',

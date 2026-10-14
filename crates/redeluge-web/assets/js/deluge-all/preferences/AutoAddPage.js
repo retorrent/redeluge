@@ -42,7 +42,7 @@ Deluge.preferences.AutoAdd = Ext.extend(Ext.Panel, {
             border: false,
             title: _('Watched Folders'),
             autoHeight: true,
-            labelWidth: 140,
+            labelWidth: 175,
             style: 'padding-top: 5px; margin-bottom: 0px;',
         });
 

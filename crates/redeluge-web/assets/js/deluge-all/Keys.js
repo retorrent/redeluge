@@ -59,6 +59,7 @@ Deluge.Keys = {
         'space_paused',
         'archive_state',
         'archive_note',
+        'archive_target',
         'tracker_move_at',
         'tracker_remove_at',
     ],
@@ -116,6 +117,8 @@ Deluge.Keys = {
         'tracker_host',
         'comment',
         'creator',
+        'archive_state',
+        'archive_target',
     ],
 
     /**
@@ -160,7 +163,7 @@ Deluge.Keys.AlsoNeeded = {
     num_peers: ['total_peers'],
     idle_pause_at: ['idle_resume_at'],
     tracker_remove_at: ['tracker_move_at'],
-    archive_state: ['archive_note'],
+    archive_state: ['archive_note', 'archive_target'],
 };
 
 /**

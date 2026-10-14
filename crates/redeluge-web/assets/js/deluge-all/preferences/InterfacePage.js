@@ -94,7 +94,7 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
             title: _('WebUI Password'),
             style: 'margin-bottom: 0px; padding-bottom: 5px; padding-top: 5px',
             autoHeight: true,
-            labelWidth: 100,
+            labelWidth: 140,
             defaultType: 'textfield',
             defaults: {
                 width: 100,
@@ -123,7 +123,7 @@ Deluge.preferences.Interface = Ext.extend(Ext.form.FormPanel, {
             title: _('Server'),
             style: 'padding-top: 5px; margin-bottom: 0px; padding-bottom: 5px',
             autoHeight: true,
-            labelWidth: 100,
+            labelWidth: 140,
             defaultType: 'spinnerfield',
             defaults: {
                 labelSeparator: '',

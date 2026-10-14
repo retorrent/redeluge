@@ -194,6 +194,20 @@ Deluge.preferences.Labels = Ext.extend(Ext.Panel, {
         if (options.apply_queue) parts.push(_('seeding'));
         if (options.apply_move_completed) parts.push(_('move on completion'));
         if (options.apply_stuck) parts.push(_('removes stuck downloads'));
+        if (options.apply_archive && options.archive_target) {
+            parts.push(
+                String.format(
+                    options.archive_after_hours > 0
+                        ? _('archives to {0} after {1} idle')
+                        : _('archives to {0} when done'),
+                    options.archive_target,
+                    ftime(options.archive_after_hours * 3600)
+                )
+            );
+        } else if (options.apply_archive) {
+            parts.push(_('archive on, no target chosen'));
+        }
+        if (options.restore_local) parts.push(_('brings archived torrents back'));
         if (options.hide_by_default) parts.push(_('hidden by default'));
         return parts.length ? parts.join(', ') : _('nothing');
     },

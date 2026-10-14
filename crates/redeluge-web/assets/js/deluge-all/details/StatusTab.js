@@ -30,7 +30,9 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
             id: 'deluge-details-status',
 
             border: false,
-            width: 1000,
+            // Four columns of label and value side by side: narrower and the
+            // last one drops under the others.
+            width: 1200,
             listeners: {
                 render: {
                     fn: function (panel) {
@@ -110,21 +112,25 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
      * torrent until there is room, or it is not holding it at all.
      */
     diskState: function (status) {
-        // Short on purpose: this is the last row of the last column, so a
-        // sentence that wraps is a sentence with its second line cut off.
-        var archive = {
-            archiving: _('Moving to archive'),
-            syncing: _('Archive: uploading'),
-            archived: _('Archived'),
-            offline: _('Archive offline'),
-        }[status.archive_state];
-        if (archive) {
-            return status.archive_note
-                ? archive + ' — ' + Ext.util.Format.htmlEncode(status.archive_note)
-                : archive;
-        }
-        if (status.archive_note) return Ext.util.Format.htmlEncode(status.archive_note);
         return status.space_paused ? _('Waiting for room') : _('Not held');
+    },
+
+    /**
+     * Where its files are and what the archive is doing about it, in full:
+     * this row has the whole width, so a reason is never cut in half.
+     */
+    archiveState: function (status) {
+        var esc = Ext.util.Format.htmlEncode;
+        var target = status.archive_target;
+        var note = status.archive_note ? esc(status.archive_note) : '';
+        var what = {
+            archiving: _('being moved to {0}'),
+            syncing: _('on {0}, rclone is uploading it'),
+            archived: _('on {0}, seeding from the archive'),
+            offline: _('on {0}, which is offline: paused until it answers'),
+        }[status.archive_state];
+        var line = what ? String.format(what, esc(target || '')) : _('on local disk');
+        return note ? line + ' — ' + note : line;
     },
 
     onRequestComplete: function (status) {
@@ -171,6 +177,7 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
         data.auto_managed = _(status.is_auto_managed ? 'True' : 'False');
         data.idle_state = this.idleState(status);
         data.disk_state = this.diskState(status);
+        data.archive_state = this.archiveState(status);
 
         var translate_tracker_status = {
             Error: _('Error'),
@@ -203,8 +210,14 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
 
         for (var field in this.fields) {
             this.fields[field].innerHTML = data[field];
+            // The full text on hover, for a value its column cuts short.
+            this.fields[field].title = this.fields[field].textContent;
         }
-        var text = status.state + ' ' + status.progress.toFixed(2) + '%';
+        var label = Deluge.archiveLabel(status) || _(status.state);
+        var text =
+            label +
+            ' ' +
+            (status.progress >= 100 ? '100%' : status.progress.toFixed(2) + '%');
         this.progressBar.updateProgress(status.progress / 100.0, text);
     },
 });

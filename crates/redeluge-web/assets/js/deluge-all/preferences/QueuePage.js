@@ -241,7 +241,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             border: false,
             title: _('Pause Idle Downloads'),
             autoHeight: true,
-            labelWidth: 210,
+            labelWidth: 240,
             style: 'padding-top: 5px; margin-bottom: 0px',
         });
         fieldset.add({
@@ -285,7 +285,7 @@ Deluge.preferences.Queue = Ext.extend(Ext.form.FormPanel, {
             border: false,
             title: _('Downloads That Get Nowhere'),
             autoHeight: true,
-            labelWidth: 210,
+            labelWidth: 240,
             style: 'padding-top: 5px; margin-bottom: 0px',
         });
         fieldset.add({

@@ -27,8 +27,8 @@ Deluge.preferences.PreferencesWindow = Ext.extend(Ext.Window, {
     // Deluge's 485 that grid stuck two hundred pixels out past the frame with
     // no way to reach the columns. Taller too, so the pages that scroll have
     // less to scroll.
-    width: 700,
-    height: 540,
+    width: 820,
+    height: 600,
     minWidth: 420,
     minHeight: 360,
     border: false,

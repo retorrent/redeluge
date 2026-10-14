@@ -165,6 +165,7 @@ Deluge.preferences.Network = Ext.extend(Ext.form.FormPanel, {
             xtype: 'fieldset',
             border: false,
             title: _('Type Of Service'),
+            labelWidth: 130,
             style: 'margin-bottom: 5px; padding-bottom: 0px;',
             bodyStyle: 'margin: 0px; padding: 0px',
             autoHeight: true,
@@ -176,7 +177,7 @@ Deluge.preferences.Network = Ext.extend(Ext.form.FormPanel, {
                 name: 'peer_tos',
                 fieldLabel: _('Peer TOS Byte:'),
                 labelSeparator: '',
-                width: 40,
+                width: 60,
             })
         );
     },

@@ -244,13 +244,20 @@ dl.singleline dt {
     float: left;
     font-weight: bold;
     height: 19px;
+    width: 112px;
+    white-space: nowrap;
 }
 
+/* A value its column is too narrow for is cut with an ellipsis, and shown
+   in full on hover, rather than running under the next column. */
 #torrentDetails dl dd,
 dl.singleline dd {
-    margin-left: 100px;
+    margin-left: 116px;
     width: 140px;
     height: 19px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 dl.singleline {
@@ -280,15 +287,29 @@ dl.singleline dd {
 .x-deluge-status dd.share,
 .x-deluge-status dd.announce,
 .x-deluge-status dd.tracker_status {
-    width: 200px;
-    margin-left: 100px;
+    width: 190px;
+    margin-left: 116px;
 }
 
 .x-deluge-status dd.downspeed,
 .x-deluge-status dd.upspeed,
 .x-deluge-status dd.eta,
 .x-deluge-status dd.pieces {
-    margin-left: 100px;
+    margin-left: 116px;
+}
+
+/* The archive row: the whole width, and allowed to wrap, so a reason is
+   never cut in half. */
+#torrentDetails dl.x-deluge-status-wide {
+    float: none;
+    min-height: 0;
+    margin-top: 2px;
+}
+#torrentDetails dl.x-deluge-status-wide dd {
+    width: auto;
+    height: auto;
+    white-space: normal;
+    max-width: 900px;
 }
 
 .x-deluge-status dd.active_time,
@@ -303,11 +324,13 @@ dl.singleline dd {
 
 /* Torrent Details - Details Tab */
 #torrentDetails dd.torrent_name,
+#torrentDetails dd.hash,
 #torrentDetails dd.status,
 #torrentDetails dd.tracker,
 #torrentDetails dd.path,
 #torrentDetails dd.comment {
     width: auto;
+    white-space: normal;
 }
 
 .detailsPanel .x-panel-header {
@@ -470,6 +493,13 @@ dl.singleline dd {
 /* Options Tab Styles */
 .x-deluge-options-label {
     margin-right: 10px;
+    /* One line each: the fieldsets are sized for it. */
+    white-space: nowrap;
+}
+
+/* A checkbox whose label has to stay on one line beside its field. */
+.x-deluge-nowrap .x-form-cb-label {
+    white-space: nowrap;
 }
 
 .x-deluge-indent-checkbox {

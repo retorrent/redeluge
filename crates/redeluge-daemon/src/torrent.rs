@@ -224,6 +224,9 @@ pub struct Torrent {
     /// Where its files are, as far as archiving goes. Set by the archive
     /// sweep; `None` for files on local disk.
     pub archive_state: Option<crate::features::archive::ArchiveState>,
+    /// The name of the archive target its files are on, or are going to.
+    /// What the interface shows instead of a mount path.
+    pub archive_target: Option<String>,
     /// When a torrent held after an error on its target may be tried again.
     pub archive_retry_at: f64,
     /// Why its label's archive rule has not moved it yet, or empty.
@@ -274,6 +277,7 @@ impl Torrent {
             moving_to: None,
             content_id: None,
             archive_state: None,
+            archive_target: None,
             archive_retry_at: 0.0,
             archive_note: String::new(),
             upload_hold_declined: false,
@@ -353,6 +357,12 @@ impl Torrent {
             put("name", Value::Str(self.display_name(status)));
         }
         put("state", Value::Str(state.to_string()));
+        if keys.wants("archive_target") {
+            put(
+                "archive_target",
+                Value::Str(self.archive_target.clone().unwrap_or_default()),
+            );
+        }
         if keys.wants("archive_note") {
             put("archive_note", Value::Str(self.archive_note.clone()));
         }
