@@ -882,12 +882,12 @@ own, and that must not pull an archive back onto a small disk unasked.
 
 While rclone uploads a torrent's files, seeding them would reopen them, and
 rclone takes a file opened during its upload as changed: it cancels and starts
-again. So a torrent that peers ask for during its upload goes back to the
-folder it came from — which cancels the upload — and waits its label's delay
-again, an hour at least, before it can be archived again: it was not idle
-after all. If it cannot go back (no room, another move running), it is paused
-until the upload is done instead. Both need the target's rc URL; without it
-there is no way to know an upload is under way.
+again, for as long as peers keep asking. So a torrent is **paused before its
+copy into the archive starts and stays paused until rclone has uploaded it**,
+then let go to seed from the archive (*Uploading to archive*, then *Remote
+Seed*). This needs the target's rc URL; without it nothing says when the
+upload is done, and the torrent is let go as soon as the copy ends. Resuming
+it by hand during the upload is allowed and not undone.
 
 Two limits apply to the whole platform, in Preferences, *Archive*:
 

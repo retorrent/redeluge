@@ -901,7 +901,6 @@ fn handle_alert<F: Fn(Event)>(state: &mut SessionState, alert: &Alert, emit: &F)
                     // that is now local.
                     torrent.archive_state = match torrent.archive_state {
                         Some(crate::features::archive::ArchiveState::Archiving) => {
-                            torrent.archived_at = now_seconds();
                             Some(crate::features::archive::ArchiveState::Syncing)
                         }
                         _ => None,

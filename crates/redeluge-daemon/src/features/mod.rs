@@ -1240,9 +1240,11 @@ struct RuleMove {
     /// Onto an archive target, as opposed to back from one or a plain move:
     /// what makes the torrent show "Moving to archive" straight away.
     to_archive: bool,
-    /// Undoing an archive because peers asked for it during the upload. When
-    /// it cannot start, the torrent is held paused until the upload is done.
-    abort: bool,
+    /// Pause the torrent before the copy and keep it paused until rclone has
+    /// uploaded it: a torrent seeding during its upload reopens its files,
+    /// and rclone takes a file opened during its upload as changed and starts
+    /// it again. Set for moves onto a target whose rc says when it is done.
+    hold: bool,
 }
 
 /// A removal a tracker's rule asks for.
@@ -1372,7 +1374,7 @@ fn decide_tracker_work(
                 size: status.total_wanted.max(status.total_done),
                 which: rule::TRACKER,
                 to_archive: false,
-                abort: false,
+                hold: false,
                 detail: format!(
                     "{host} says its finished torrents go to {}",
                     options.move_path
@@ -1480,11 +1482,30 @@ async fn start_move(core: &Core, candidate: &RuleMove, reserved: i64, at: f64) -
     let id = candidate.id.clone();
     let to = candidate.to.clone();
     let archiving = candidate.to_archive;
-    let origin = candidate.from.clone();
+    let hold = candidate.hold;
     let started = core
         .manager
         .with(move |state| {
+            use redeluge_libtorrent::{flags, FlagChange};
+            let pause = |paused: bool, managed: bool| {
+                FlagChange::new()
+                    .set_to(flags::PAUSED, paused)
+                    .set_to(flags::AUTO_MANAGED, managed)
+            };
+            // Paused before the copy starts, so no peer opens the files at any
+            // point between here and the end of rclone's upload. The archive's
+            // sweep lets it go once rclone says the upload is done.
+            let was_managed = state
+                .torrents
+                .get(&id)
+                .is_none_or(|torrent| torrent.options.auto_managed);
+            if hold {
+                let _ = state.session.set_flags(&id, pause(true, false));
+            }
             let outcome = state.session.move_storage(&id, &to);
+            if outcome.is_err() && hold {
+                let _ = state.session.set_flags(&id, pause(false, was_managed));
+            }
             if outcome.is_ok() {
                 // What makes the status say "Moving" until libtorrent answers
                 // with the alert that updates the save path.
@@ -1495,10 +1516,17 @@ async fn start_move(core: &Core, candidate: &RuleMove, reserved: i64, at: f64) -
                     if archiving {
                         torrent.archive_state =
                             Some(crate::features::archive::ArchiveState::Archiving);
-                        torrent.options.archive_origin = origin;
-                        state.mark_dirty();
+                    }
+                    if hold {
+                        if !torrent.options.archive_paused {
+                            torrent.options.archive_was_managed = was_managed;
+                        }
+                        torrent.options.archive_upload_held = true;
+                        torrent.options.paused = true;
+                        torrent.options.auto_managed = false;
                     }
                 }
+                state.mark_dirty();
             }
             outcome
         })
@@ -1945,49 +1973,15 @@ async fn keep_archives(core: Arc<Core>) {
                 continue;
             }
             let id = candidate.id.clone();
-            let abort = candidate.abort;
             let note = format!("waiting: not enough room at {} to move it", candidate.to);
-            let held = core
-                .manager
+            core.manager
                 .with(move |state| {
-                    use redeluge_libtorrent::{flags, FlagChange};
-                    let Some(torrent) = state.torrents.get_mut(&id) else {
-                        return false;
-                    };
-                    torrent.archive_note = note;
-                    if !abort {
-                        return false;
+                    if let Some(torrent) = state.torrents.get_mut(&id) {
+                        torrent.archive_note = note;
                     }
-                    // It could not go back, so it stays on the archive: hold it
-                    // paused until the upload is done, and drop the cooldown
-                    // that was set for a torrent that would have been local.
-                    torrent.options.archive_not_before = 0.0;
-                    if !torrent.options.archive_paused {
-                        torrent.options.archive_was_managed = torrent.options.auto_managed;
-                    }
-                    torrent.options.archive_upload_held = true;
-                    torrent.options.paused = true;
-                    torrent.options.auto_managed = false;
-                    let change = FlagChange::new()
-                        .set_to(flags::PAUSED, true)
-                        .set_to(flags::AUTO_MANAGED, false);
-                    let paused = state.session.set_flags(&id, change).is_ok();
-                    state.mark_dirty();
-                    paused
                 })
                 .await
-                .unwrap_or(false);
-            if held {
-                record(
-                    &core,
-                    Action::new(rule::ARCHIVE, did::PAUSED, at)
-                        .torrent(&candidate.id, &candidate.name)
-                        .detail(format!(
-                            "peers asked for it during the upload and there is no room to bring it back to {}: paused until the upload is done",
-                            candidate.to
-                        )),
-                );
-            }
+                .ok();
         }
     }
 }
@@ -2079,7 +2073,6 @@ fn sweep_archives(
     let mut to_release: Vec<String> = Vec::new();
     let mut to_clear: Vec<String> = Vec::new();
     let mut to_hold: Vec<(String, String)> = Vec::new();
-    let mut to_abort: Vec<RuleMove> = Vec::new();
     let mut to_unhold: Vec<(String, String)> = Vec::new();
     let mut hand_resumed = false;
 
@@ -2126,11 +2119,10 @@ fn sweep_archives(
         };
 
         // ------------------------------------------------ upload hold
-        // Paused while rclone uploads it, and let go when it is done. Seeding
-        // meanwhile reopens the files, which rclone takes for a change: it
-        // cancels the upload and starts again, and with peers coming and
-        // going it never finishes. Only with the rc: without it nothing says
-        // when the upload is over.
+        // Paused from before the copy until rclone has uploaded it, then let
+        // go to seed from the archive. Seeding meanwhile reopens the files,
+        // which rclone takes for a change: it cancels the upload and starts
+        // again, and with peers coming and going it never finishes.
         let syncing = torrent.archive_state == Some(ArchiveState::Syncing);
         if torrent.options.archive_upload_held && !status.is_paused {
             torrent.options.archive_upload_held = false;
@@ -2140,56 +2132,26 @@ fn sweep_archives(
         if !syncing {
             torrent.upload_hold_declined = false;
         }
+        // Whether rclone's queue says where this upload is, or there is no rc
+        // to ask: without one nothing will ever say it is done, so the hold
+        // ends with the copy.
         let upload_known = here.is_some_and(|target| {
             let index = index_of(target).unwrap_or(0);
-            online[index] && queues[index].is_some()
+            online[index] && (queues[index].is_some() || target.rc_url.is_empty())
         });
-        let asked = archive::asked_since_archived(
-            status.time_since_upload,
-            i64::from(status.upload_payload_rate),
-            torrent.archived_at,
-            now,
-        );
+        // One that a restart, or an rc URL added later, left seeding during
+        // its upload: held now. The pause before the copy covers the rest.
         if syncing
-            && asked
             && !status.is_paused
             && !torrent.options.archive_upload_held
             && !torrent.options.archive_paused
             && !torrent.upload_hold_declined
         {
-            // Peers want it during the upload: it was not idle after all.
-            // Back to where it came from, which deletes it from the mount and
-            // so cancels rclone's upload, and not again for a while. When it
-            // cannot go back right now, hold it paused until the upload is
-            // done instead: either way the upload stops restarting.
-            let origin = torrent.options.archive_origin.trim().to_owned();
-            if !origin.is_empty() && moving_count + to_abort.len() < limits.moves {
-                let wanted = labels
-                    .options(&torrent.options.label)
-                    .and_then(|options| options.archive_rule())
-                    .map_or(0.0, |(_, hours)| hours * 3600.0);
-                let wait = wanted.max(archive::COOLDOWN_MIN);
-                torrent.options.archive_not_before = now + wait;
-                hand_resumed = true;
-                to_abort.push(RuleMove {
-                    id: status.info_hash.clone(),
-                    name: status.name.clone(),
-                    host: torrent.options.label.clone(),
-                    from: status.save_path.clone(),
-                    to: origin.clone(),
-                    size: status.total_wanted.max(status.total_done),
-                    which: rule::ARCHIVE,
-                    to_archive: false,
-                    abort: true,
-                    detail: format!(
-                        "peers asked for it while rclone was uploading it: back to {origin}, not archived again for {}",
-                        archive::duration(wait)
-                    ),
-                });
-            } else {
-                to_hold.push((status.info_hash.clone(), status.name.clone()));
-            }
+            to_hold.push((status.info_hash.clone(), status.name.clone()));
         } else if torrent.options.archive_upload_held
+            // Never mid-copy: the files are still where they came from then.
+            && !status.moving_storage
+            && torrent.moving_to.is_none()
             && (here.is_none()
                 || (upload_known && torrent.archive_state == Some(ArchiveState::Archived)))
         {
@@ -2227,8 +2189,6 @@ fn sweep_archives(
         state.mark_dirty();
     }
 
-    // An archive being undone goes before any new one.
-    work.moves.append(&mut to_abort);
     work.in_flight = in_flight;
 
     // How many torrents are on their way into each target: being copied in,
@@ -2324,7 +2284,7 @@ fn sweep_archives(
                     size: status.total_wanted.max(status.total_done),
                     which: rule::ARCHIVE,
                     to_archive: false,
-                    abort: false,
+                    hold: false,
                     detail: format!("label {label_name} brings archived torrents back to {home}"),
                 });
                 None
@@ -2369,7 +2329,6 @@ fn sweep_archives(
             moving: status.moving_storage || torrent.moving_to.is_some(),
             queue_busy: copies_full(work.moves.len()),
             moving_name: moving_name.as_deref(),
-            cooldown: (torrent.options.archive_not_before - now).max(0.0),
             target_full: limits
                 .per_target
                 .filter(|limit| on_their_way[index_of(target).unwrap_or(0)] >= *limit),
@@ -2386,7 +2345,7 @@ fn sweep_archives(
                     size: status.total_wanted.max(status.total_done),
                     which: rule::ARCHIVE,
                     to_archive: true,
-                    abort: false,
+                    hold: !target.rc_url.is_empty(),
                     detail: format!(
                         "label {} archives quiet torrents to {}",
                         torrent.options.label, target.name
@@ -2446,6 +2405,7 @@ fn sweep_archives(
             .is_some_and(|torrent| torrent.options.archive_paused);
         if let Some(torrent) = state.torrents.get_mut(&id) {
             torrent.options.archive_upload_held = false;
+            torrent.archive_note.clear();
         }
         state.mark_dirty();
         // The offline hold, if there is one, keeps it paused and lets it go.

@@ -8,6 +8,24 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.10.4] — 2026-10-14
+
+### Fixed
+
+- **An archive upload still restarted over and over.** 1.10.3 sent a torrent
+  back to its original folder when it saw demand during the upload, and read
+  demand from libtorrent's upload rate — an average still above zero for a
+  while after the last byte. A torrent that was seeding a moment before its
+  move, which is every torrent of a label that archives at once, was taken
+  for wanted: moved back (which deletes it from the mount and cancels the
+  upload), archived again an hour later, and round again. That is gone.
+  Instead the torrent is **paused before its copy into the archive starts and
+  stays paused until rclone has uploaded it**, then let go to seed from the
+  archive. Nothing opens its files in between, so rclone never cancels.
+  Checked against rclone's log: no cancelled upload. Without the target's rc
+  URL nothing says when the upload is done, so it is let go once the copy
+  ends, as before.
+
 ## [1.10.3] — 2026-10-14
 
 ### Added

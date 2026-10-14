@@ -476,9 +476,6 @@ pub struct Candidate<'a> {
     /// Another move is running, or one was chosen earlier in this pass.
     pub queue_busy: bool,
     pub moving_name: Option<&'a str>,
-    /// Seconds before it may go again, after the archive gave it back
-    /// because peers asked for it during its upload. Zero for none.
-    pub cooldown: f64,
     /// The target already has as many torrents on their way in as it is
     /// allowed: the limit, to say so.
     pub target_full: Option<usize>,
@@ -515,12 +512,6 @@ pub fn decide(candidate: &Candidate) -> Verdict {
     if candidate.source_offline {
         return wait("waiting: its current location is offline".to_owned());
     }
-    if candidate.cooldown > 0.0 {
-        return wait(format!(
-            "waiting: peers asked for it while it was uploading, so it came back; it can go again in {}",
-            duration(candidate.cooldown)
-        ));
-    }
     if candidate.idle.is_none_or(|idle| idle < candidate.wanted) {
         return wait(format!(
             "waiting: idle {} of the {} the label asks for",
@@ -547,29 +538,6 @@ pub fn decide(candidate: &Candidate) -> Verdict {
         ));
     }
     Verdict::Move
-}
-
-/// The least a torrent given back for demand waits before it goes again. A
-/// label that archives at once would otherwise send it straight back.
-// ponytail: a fixed hour; per label if somebody wants a longer one.
-pub const COOLDOWN_MIN: f64 = 3600.0;
-
-/// Whether a peer has been sent anything since the torrent's copy into the
-/// archive finished: demand during rclone's upload, which means it was not
-/// idle after all, and seeding it now reopens the files and makes rclone
-/// cancel and start the upload again.
-///
-/// `archived_at` is zero after a restart, when only the current rate says.
-pub fn asked_since_archived(
-    since_upload: i64,
-    upload_rate: i64,
-    archived_at: f64,
-    now: f64,
-) -> bool {
-    if upload_rate > 0 {
-        return true;
-    }
-    archived_at > 0.0 && since_upload >= 0 && (since_upload as f64) < now - archived_at
 }
 
 /// What one torrent on a target should have done to it this pass.
@@ -635,31 +603,6 @@ mod tests {
         .usable()
     }
 
-    #[test]
-    fn demand_counts_only_after_the_copy_into_the_archive() {
-        // Copied at 1000, now 1100: an upload 50 s ago happened after.
-        assert!(asked_since_archived(50, 0, 1000.0, 1100.0));
-        // One 500 s ago was before the copy, the seeding that made it idle-ish.
-        assert!(!asked_since_archived(500, 0, 1000.0, 1100.0));
-        // Never uploaded.
-        assert!(!asked_since_archived(-1, 0, 1000.0, 1100.0));
-        // After a restart only the rate says.
-        assert!(!asked_since_archived(5, 0, 0.0, 1100.0));
-        assert!(asked_since_archived(-1, 2048, 0.0, 1100.0));
-    }
-
-    #[test]
-    fn a_torrent_given_back_waits_out_its_cooldown() {
-        let back = Candidate {
-            cooldown: 1800.0,
-            ..ready()
-        };
-        match decide(&back) {
-            Verdict::Wait(note) => assert!(note.contains("can go again in 30m"), "{note}"),
-            other => panic!("{other:?}"),
-        }
-    }
-
     fn ready() -> Candidate<'static> {
         Candidate {
             target: "s4",
@@ -673,7 +616,6 @@ mod tests {
             moving: false,
             queue_busy: false,
             moving_name: None,
-            cooldown: 0.0,
             target_full: None,
         }
     }
