@@ -22,6 +22,8 @@ services:
       # Applied on first boot only, unless DELUGE_WEB_PASSWORD_RESET=1.
       DELUGE_WEB_PASSWORD: ${DELUGE_WEB_PASSWORD:?copy .env.example to .env and set a web password}
       DELUGE_WEB_PASSWORD_RESET: ${DELUGE_WEB_PASSWORD_RESET:-0}
+      # 1 shows the Connection Manager button; one daemon needs none.
+      DELUGE_WEB_CONNECTION_MANAGER: ${DELUGE_WEB_CONNECTION_MANAGER:-0}
 
     volumes:
       - ./data/config:/config

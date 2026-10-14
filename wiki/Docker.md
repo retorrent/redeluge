@@ -108,6 +108,7 @@ standard library only, and is in the image at
 | `DELUGE_WEB_PORT` | `8112` | Web UI port inside the container |
 | `DELUGE_WEB_INTERFACE` | `0.0.0.0` | Web UI bind address inside the container |
 | `DELUGE_WEB_BASE` | `/` | Path prefix, for serving under a reverse proxy subpath |
+| `DELUGE_WEB_CONNECTION_MANAGER` | `0` | Set to `1` to show the *Connection Manager* button. Hidden by default: the Web UI connects to its daemon and reconnects by itself, and the window still opens on its own when no connection can be made |
 | `DELUGE_DAEMON_PORT` | `58846` | Daemon RPC port |
 | `DELUGE_LOGLEVEL` | `info` | `none`, `critical`, `error`, `warning`, `info` or `debug`, translated to `RUST_LOG` |
 | `RUST_LOG` | unset | What the binaries actually read. Wins over `DELUGE_LOGLEVEL`, and can name a module: `redeluge_daemon::features=debug` |

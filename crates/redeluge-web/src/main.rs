@@ -136,6 +136,7 @@ async fn main() -> std::io::Result<()> {
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
         version: VERSION.to_owned(),
+        connection_manager: std::env::var("DELUGE_WEB_CONNECTION_MANAGER").as_deref() == Ok("1"),
     };
 
     let password =

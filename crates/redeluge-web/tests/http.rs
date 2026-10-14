@@ -33,6 +33,7 @@ fn state(config_dir: &std::path::Path) -> SharedState {
             theme: "dark".to_owned(),
             default_daemon: None,
             version: "1.6.0".to_owned(),
+            connection_manager: false,
         },
         password: RwLock::new(hash_password(PASSWORD).expect("hashable")),
         sessions: Mutex::new(Sessions::new()),

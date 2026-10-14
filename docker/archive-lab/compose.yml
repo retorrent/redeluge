@@ -28,6 +28,7 @@ services:
       REMOTE_B: ${REMOTE_B:-minio:archive-b}
       # The lab's Web UI password; lab.py logs in with it.
       DELUGE_WEB_PASSWORD: deluge
+      DELUGE_WEB_CONNECTION_MANAGER: ${DELUGE_WEB_CONNECTION_MANAGER:-0}
       # Targets to leave unmounted at start, e.g. LAB_DOWN=a: a restart
       # during an outage.
       LAB_DOWN: ${LAB_DOWN:-}

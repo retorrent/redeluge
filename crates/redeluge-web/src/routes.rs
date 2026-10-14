@@ -62,6 +62,8 @@ async fn serve_index(request: HttpRequest, state: web::Data<SharedState>) -> Htt
         // The poll loop reads this before `web.get_config` has answered, so it
         // has to be in the page rather than only in that call.
         "poll_interval": json_api::poll_interval(state).await,
+        // Hidden unless DELUGE_WEB_CONNECTION_MANAGER=1: see `Settings`.
+        "connection_manager": state.settings.connection_manager,
     });
 
     match index::render_index(

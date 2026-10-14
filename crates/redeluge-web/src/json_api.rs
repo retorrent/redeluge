@@ -2087,6 +2087,7 @@ mod epoch_tests {
                 theme: "dark".to_owned(),
                 default_daemon: None,
                 version: "test".to_owned(),
+                connection_manager: false,
             },
             password: tokio::sync::RwLock::new(crate::auth::StoredPassword::Unset),
             sessions: Mutex::new(crate::auth::Sessions::new()),

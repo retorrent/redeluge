@@ -8,6 +8,37 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.10.7] — 2026-10-14
+
+### Added
+
+- **Archive rows in the sidebar's States.** Under *Seeding*, **(Ar)Seeding**
+  counts the torrents seeding from an archive (cyan), and **Archiving** the
+  ones on their way there — being copied or uploaded by rclone (violet).
+  Clicking either lists them. The `state` key is unchanged: they are still
+  *Seeding* for the *arr clients, and still under *Seeding* in the sidebar.
+
+### Changed
+
+- **The Connection Manager button is hidden.** The Web UI connects to its
+  daemon by itself and reconnects after a restart, so one daemon beside one
+  UI has nothing to pick; the window still opens on its own when no connection
+  can be made. `DELUGE_WEB_CONNECTION_MANAGER=1` shows the button again.
+
+- **The Rule Explorer simulates the torrent's life in order.** Each event —
+  archiving, a change of label, a tracker's move, a removal — is applied at its
+  hour, and what follows sees the torrent as that left it: its label, and
+  whether it is on an archive. A torrent archived at once by one label and
+  relabelled twelve hours later is shown already on the archive when the new
+  label takes over, staying there, moving to another target or coming back
+  to local disk as that label says.
+- Each label the torrent passes through is a section of its own, in its own
+  colour down the left edge, with its stages numbered from one.
+- *Later put in label … hours after it finishes* covers a label change no rule
+  makes: somebody by hand, or an *arr's post-import category.
+- A label a tracker rule writes as *Films* is found as `films`, the way the
+  daemon stores it; before, everything after such a relabel was missing.
+
 ## [1.10.6] — 2026-10-14
 
 ### Fixed

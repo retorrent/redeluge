@@ -3910,7 +3910,16 @@ impl Core {
 }
 
 /// One row per torrent, as the sidebar counts them.
-type FilterRow = (TorrentState, String, String, String, bool, String, bool);
+type FilterRow = (
+    TorrentState,
+    String,
+    String,
+    String,
+    bool,
+    String,
+    bool,
+    Option<crate::features::archive::ArchiveState>,
+);
 
 /// The sidebar's rows, read off a walk the caller already did.
 fn filter_rows(
@@ -3941,6 +3950,7 @@ fn filter_rows(
                 // The tracker answered and said nobody has this. `-1` is "it
                 // has not said", which is why this is not written as `<= 0`.
                 !status.is_finished && status.num_complete == 0 && status.num_incomplete == 0,
+                torrent.archive_state,
             ))
         })
         .collect()
@@ -4067,9 +4077,25 @@ fn filter_tree_of(statuses: Vec<FilterRow>) -> Value {
     let mut active = 0i64;
     let mut unregistered = 0i64;
     let mut dead = 0i64;
+    let mut archiving = 0i64;
+    let mut ar_seeding = 0i64;
 
-    for (state, tracker, owner, label, transferring, tracker_status, dead_swarm) in statuses {
+    for (state, tracker, owner, label, transferring, tracker_status, dead_swarm, archive) in
+        statuses
+    {
         *by_state.entry(state).or_insert(0) += 1;
+        match archive {
+            Some(
+                crate::features::archive::ArchiveState::Archiving
+                | crate::features::archive::ArchiveState::Syncing,
+            ) => archiving += 1,
+            Some(crate::features::archive::ArchiveState::Archived)
+                if state == TorrentState::Seeding =>
+            {
+                ar_seeding += 1
+            }
+            _ => {}
+        }
         // Active means moving bytes, not "not paused". A seeding torrent
         // nobody is downloading from is idle, and counting it here put
         // every finished torrent in a category meant for the ones worth
@@ -4123,6 +4149,13 @@ fn filter_tree_of(statuses: Vec<FilterRow>) -> Value {
             state.as_str(),
             by_state.get(&state).copied().unwrap_or(0),
         ));
+        // Archive rows sit under Seeding: (Ar)Seeding is the part of it that
+        // seeds off an archive, Archiving what is on its way there. The
+        // `state` key itself stays Seeding for the *arr clients.
+        if state == TorrentState::Seeding {
+            states.push(pair(AR_SEEDING, ar_seeding));
+            states.push(pair(ARCHIVING, archiving));
+        }
     }
 
     let mut trackers = vec![pair("All", total)];
@@ -4324,7 +4357,12 @@ const STATE_NEEDS: &[&str] = &[
     "total_seeds",
     "total_peers",
     "is_finished",
+    "archive_state",
 ];
+
+/// Sidebar rows answered from `archive_state` rather than `state`.
+const AR_SEEDING: &str = "(Ar)Seeding";
+const ARCHIVING: &str = "Archiving";
 
 /// The keys to build, which is what the client asked for plus what the filter
 /// needs to answer.
@@ -4386,6 +4424,18 @@ fn matches_filter(status: &BTreeMap<String, Value>, filter: &[(String, Vec<Strin
         // why this cannot be written as `<= 0`.
         if key == "state" && wanted.iter().any(|value| value == "Dead") {
             return is_dead_swarm(status);
+        }
+        if key == "state"
+            && wanted
+                .iter()
+                .any(|value| value == AR_SEEDING || value == ARCHIVING)
+        {
+            let field = |name: &str| status.get(name).and_then(Value::as_str).unwrap_or_default();
+            return if wanted.iter().any(|value| value == AR_SEEDING) {
+                field("archive_state") == "archived" && field("state") == "Seeding"
+            } else {
+                matches!(field("archive_state"), "archiving" | "syncing")
+            };
         }
         // The quick search. Deluge looks in more than the name, so that
         // "error" or the name of a tracker finds what you meant, and every
@@ -4541,6 +4591,41 @@ mod filter_tests {
         assert!(!matches_filter(
             &status("Paused", 0, 0),
             &by_state("Active")
+        ));
+    }
+
+    #[test]
+    fn archive_rows_read_the_archive_state() {
+        let with = |state: &str, archive: &str| {
+            let mut out = status(state, 0, 0);
+            out.insert("archive_state".to_owned(), Value::Str(archive.to_owned()));
+            out
+        };
+        assert!(matches_filter(
+            &with("Seeding", "archived"),
+            &by_state(AR_SEEDING)
+        ));
+        assert!(!matches_filter(&with("Seeding", ""), &by_state(AR_SEEDING)));
+        assert!(!matches_filter(
+            &with("Paused", "archived"),
+            &by_state(AR_SEEDING)
+        ));
+        assert!(matches_filter(
+            &with("Paused", "syncing"),
+            &by_state(ARCHIVING)
+        ));
+        assert!(matches_filter(
+            &with("Moving", "archiving"),
+            &by_state(ARCHIVING)
+        ));
+        assert!(!matches_filter(
+            &with("Seeding", "archived"),
+            &by_state(ARCHIVING)
+        ));
+        // Plain Seeding still has every seeder, archived or not.
+        assert!(matches_filter(
+            &with("Seeding", "archived"),
+            &by_state("Seeding")
         ));
     }
 

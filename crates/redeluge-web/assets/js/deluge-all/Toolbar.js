@@ -136,6 +136,11 @@ Deluge.Toolbar = Ext.extend(Ext.Toolbar, {
                     },
                     {
                         id: 'connectionman',
+                        // One daemon beside one Web UI needs no picker: the
+                        // UI connects and reconnects by itself, and the window
+                        // still opens on its own when it cannot.
+                        // DELUGE_WEB_CONNECTION_MANAGER=1 brings it back.
+                        hidden: !(deluge.config && deluge.config.connection_manager),
                         text: _('Connection Manager'),
                         iconCls: 'x-deluge-connection-manager',
                         handler: this.onConnectionManagerClick,

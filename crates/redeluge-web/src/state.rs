@@ -35,6 +35,11 @@ pub struct Settings {
     pub default_daemon: Option<String>,
     /// Version reported to the browser, which shows it in the page title.
     pub version: String,
+    /// Whether the toolbar shows the Connection Manager. Off: this image runs
+    /// one daemon beside one Web UI, which connects to it by itself and
+    /// reconnects on its own. The window still opens by itself when no
+    /// connection can be made.
+    pub connection_manager: bool,
 }
 
 /// Shared across every request.

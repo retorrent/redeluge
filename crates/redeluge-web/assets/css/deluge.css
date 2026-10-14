@@ -552,6 +552,28 @@ dl.singleline dd {
     font-weight: bold;
 }
 
+/* Sidebar rows for the archive. The tint goes on a pseudo-element so the
+ * row's text keeps its colour. */
+#sidebar .x-deluge-archiving,
+#sidebar .x-deluge--ar-seeding {
+    position: relative;
+}
+#sidebar .x-deluge-archiving::before,
+#sidebar .x-deluge--ar-seeding::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 16px;
+    height: 16px;
+    background: url('../icons/seeding.png') no-repeat left / contain;
+}
+#sidebar .x-deluge-archiving::before {
+    filter: hue-rotate(55deg) saturate(1.8);
+}
+#sidebar .x-deluge--ar-seeding::before {
+    filter: hue-rotate(-40deg) saturate(1.6);
+}
 /* Sidebar styles */
 #sidebar .x-grid3-col-filter {
     height: 16px;
