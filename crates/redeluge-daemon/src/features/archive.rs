@@ -162,6 +162,10 @@ pub enum ArchiveState {
     /// On a target that does not answer, or waiting to retry after an error
     /// there. Paused until it does.
     Offline,
+    /// On a target, and rclone has tried to upload it and failed. Paused, out
+    /// of the per-target count, and at the back of rclone's queue until
+    /// nothing else is waiting for that target.
+    SyncError,
 }
 
 impl ArchiveState {
@@ -171,6 +175,7 @@ impl ArchiveState {
             Self::Syncing => "syncing",
             Self::Archived => "archived",
             Self::Offline => "offline",
+            Self::SyncError => "sync_error",
         }
     }
 }
@@ -282,7 +287,7 @@ async fn rc(client: &reqwest::Client, rc_url: &str, method: &str, body: Json) ->
 /// What rclone has yet to upload, as paths relative to the remote's root.
 ///
 /// `None` when rclone did not answer, which is "unknown", not "nothing".
-pub async fn upload_queue(client: &reqwest::Client, rc_url: &str) -> Option<Vec<String>> {
+pub async fn upload_queue(client: &reqwest::Client, rc_url: &str) -> Option<Vec<Queued>> {
     let answer = rc(
         client,
         rc_url,
@@ -297,8 +302,18 @@ pub async fn upload_queue(client: &reqwest::Client, rc_url: &str) -> Option<Vec<
             .map(|queue| {
                 queue
                     .iter()
-                    .filter_map(|item| item.get("name").and_then(Json::as_str))
-                    .map(str::to_owned)
+                    .filter_map(|item| {
+                        Some(Queued {
+                            id: item.get("id")?.as_i64()?,
+                            name: item.get("name")?.as_str()?.to_owned(),
+                            tries: item.get("tries").and_then(Json::as_i64).unwrap_or(0),
+                            uploading: item
+                                .get("uploading")
+                                .and_then(Json::as_bool)
+                                .unwrap_or(false),
+                            expiry: item.get("expiry").and_then(Json::as_f64).unwrap_or(0.0),
+                        })
+                    })
                     .collect()
             })
             .unwrap_or_default(),
@@ -400,6 +415,87 @@ pub async fn describe(client: &reqwest::Client, rc_url: &str) -> Json {
         }
     }
     Json::Object(out)
+}
+
+/// One file in rclone's upload queue, from `vfs/queue`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Queued {
+    pub id: i64,
+    /// Relative to the remote's root.
+    pub name: String,
+    /// Attempts that have failed so far.
+    pub tries: i64,
+    pub uploading: bool,
+    /// Seconds before rclone tries it next.
+    pub expiry: f64,
+}
+
+impl Queued {
+    /// Tried and failed, and not being tried again right now.
+    pub fn failed(&self) -> bool {
+        self.tries > 0 && !self.uploading
+    }
+}
+
+/// How far back a failed upload goes while other uploads to its target are
+/// waiting: out of their way until they are done.
+pub const BACK_OF_QUEUE: f64 = 6.0 * 3600.0;
+/// A failed upload pushed further than this is brought forward once nothing
+/// else is waiting. Not to zero on every pass: a file that keeps failing is
+/// tried at most this often, never in a tight loop.
+pub const RETRY_EVERY: f64 = 300.0;
+
+/// What to do with one failed upload, given whether anything else is waiting
+/// for its target: push it back, bring it forward, or leave rclone's own
+/// back-off alone. The new expiry, in seconds from now.
+pub fn reschedule(item: &Queued, others_waiting: bool) -> Option<f64> {
+    if !item.failed() {
+        return None;
+    }
+    if others_waiting {
+        (item.expiry < BACK_OF_QUEUE / 2.0).then_some(BACK_OF_QUEUE)
+    } else {
+        (item.expiry > RETRY_EVERY).then_some(0.0)
+    }
+}
+
+/// What rclone is sending right now, from `core/stats`: one entry per file,
+/// as rclone reports it (name, bytes, size, percentage, speed, eta).
+pub async fn transfers(client: &reqwest::Client, rc_url: &str) -> Option<Vec<Json>> {
+    let stats = rc(
+        client,
+        rc_url,
+        "core/stats",
+        Json::Object(Default::default()),
+    )
+    .await?;
+    Some(
+        stats
+            .get("transferring")
+            .and_then(Json::as_array)
+            .cloned()
+            .unwrap_or_default(),
+    )
+}
+
+/// Sets when rclone next tries one queued upload. Says whether it answered.
+pub async fn set_expiry(client: &reqwest::Client, rc_url: &str, id: i64, seconds: f64) -> bool {
+    rc(
+        client,
+        rc_url,
+        "vfs/queue-set-expiry",
+        serde_json::json!({ "id": id, "expiry": seconds, "relative": false }),
+    )
+    .await
+    .is_some()
+}
+
+/// The queued uploads that belong to a torrent's files.
+pub fn queued_for<'a>(relative: &str, queue: &'a [Queued]) -> Vec<&'a Queued> {
+    queue
+        .iter()
+        .filter(|item| is_syncing(relative, std::slice::from_ref(&item.name)))
+        .collect()
 }
 
 /// Whether any queued upload belongs to a torrent's files.
@@ -601,6 +697,54 @@ mod tests {
             {"name": "relative", "path": "mnt/rel"},
         ]})))
         .usable()
+    }
+
+    fn queued(tries: i64, uploading: bool, expiry: f64) -> Queued {
+        Queued {
+            id: 7,
+            name: "film.mkv".to_owned(),
+            tries,
+            uploading,
+            expiry,
+        }
+    }
+
+    #[test]
+    fn a_failed_upload_waits_at_the_back_while_others_go() {
+        // Not failed: rclone's business.
+        assert_eq!(reschedule(&queued(0, false, 5.0), true), None);
+        assert_eq!(reschedule(&queued(2, true, 0.0), true), None);
+        // Failed with others waiting: to the back, once.
+        assert_eq!(
+            reschedule(&queued(1, false, 20.0), true),
+            Some(BACK_OF_QUEUE)
+        );
+        assert_eq!(
+            reschedule(&queued(1, false, BACK_OF_QUEUE - 60.0), true),
+            None
+        );
+        // Nothing else waiting: brought forward, but not when it is due soon
+        // anyway — that is what keeps a file that keeps failing out of a loop.
+        assert_eq!(
+            reschedule(&queued(3, false, BACK_OF_QUEUE), false),
+            Some(0.0)
+        );
+        assert_eq!(reschedule(&queued(3, false, 40.0), false), None);
+    }
+
+    #[test]
+    fn queued_files_are_matched_to_their_torrent() {
+        let queue = vec![
+            queued(0, true, 0.0),
+            Queued {
+                id: 8,
+                name: "other.iso".to_owned(),
+                ..queued(0, false, 3.0)
+            },
+        ];
+        let mine = queued_for("film.mkv", &queue);
+        assert_eq!(mine.len(), 1);
+        assert_eq!(mine[0].id, 7);
     }
 
     fn ready() -> Candidate<'static> {

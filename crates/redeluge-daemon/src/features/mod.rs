@@ -1240,6 +1240,9 @@ struct RuleMove {
     /// Onto an archive target, as opposed to back from one or a plain move:
     /// what makes the torrent show "Moving to archive" straight away.
     to_archive: bool,
+    /// The archive target's name when the move goes onto one: what the
+    /// interface shows from the first second, before the next sweep.
+    target_name: Option<String>,
     /// Pause the torrent before the copy and keep it paused until rclone has
     /// uploaded it: a torrent seeding during its upload reopens its files,
     /// and rclone takes a file opened during its upload as changed and starts
@@ -1373,6 +1376,7 @@ fn decide_tracker_work(
                 // that has more on disk than it now wants.
                 size: status.total_wanted.max(status.total_done),
                 which: rule::TRACKER,
+                target_name: None,
                 to_archive: false,
                 hold: false,
                 detail: format!(
@@ -1482,6 +1486,7 @@ async fn start_move(core: &Core, candidate: &RuleMove, reserved: i64, at: f64) -
     let id = candidate.id.clone();
     let to = candidate.to.clone();
     let archiving = candidate.to_archive;
+    let target_name = candidate.target_name.clone();
     let hold = candidate.hold;
     let started = core
         .manager
@@ -1516,6 +1521,7 @@ async fn start_move(core: &Core, candidate: &RuleMove, reserved: i64, at: f64) -
                     if archiving {
                         torrent.archive_state =
                             Some(crate::features::archive::ArchiveState::Archiving);
+                        torrent.archive_target = target_name;
                     }
                     if hold {
                         if !torrent.options.archive_paused {
@@ -1536,6 +1542,10 @@ async fn start_move(core: &Core, candidate: &RuleMove, reserved: i64, at: f64) -
         Ok(Ok(())) => {
             tracing::info!(torrent = %candidate.id, by = %candidate.host,
                 destination = %candidate.to, rule = candidate.which, "moving");
+            if candidate.hold {
+                tracing::info!(torrent = %candidate.id, name = %candidate.name,
+                    "archive: paused until rclone has uploaded it");
+            }
             record(
                 core,
                 Action::new(candidate.which, did::MOVED, at)
@@ -1893,7 +1903,7 @@ async fn keep_archives(core: Arc<Core>) {
             online[index] = up;
         }
 
-        let mut queues: Vec<Option<Vec<String>>> = vec![None; targets.len()];
+        let mut queues: Vec<Option<Vec<archive::Queued>>> = vec![None; targets.len()];
         for (index, target) in targets.iter().enumerate() {
             if online[index] && !target.rc_url.is_empty() {
                 queues[index] = archive::upload_queue(client, &target.rc_url).await;
@@ -1933,6 +1943,7 @@ async fn keep_archives(core: Arc<Core>) {
             tracing::info!(target = %name, "archive target is back");
         }
         for (id, name, why) in work.paused {
+            tracing::info!(torrent = %id, %name, reason = %why, "archive: paused");
             record(
                 &core,
                 Action::new(rule::ARCHIVE, did::PAUSED, at)
@@ -1941,6 +1952,7 @@ async fn keep_archives(core: Arc<Core>) {
             );
         }
         for (id, name) in work.released {
+            tracing::info!(torrent = %id, %name, "archive: resumed, its target answers again");
             record(
                 &core,
                 Action::new(rule::ARCHIVE, did::RESUMED, at)
@@ -1949,12 +1961,45 @@ async fn keep_archives(core: Arc<Core>) {
             );
         }
         for (id, name) in work.uploaded {
+            tracing::info!(torrent = %id, %name, "archive: upload done, seeding from the archive");
             record(
                 &core,
                 Action::new(rule::ARCHIVE, did::RESUMED, at)
                     .torrent(&id, &name)
                     .detail("uploaded; seeding from the archive"),
             );
+        }
+        for (id, name, target, tries) in &work.failed {
+            tracing::warn!(torrent = %id, %name, archive = %target, tries,
+                "archive: upload failed; at the back of the queue until nothing else is waiting");
+            record(
+                &core,
+                Action::new(rule::ARCHIVE, did::PAUSED, at)
+                    .torrent(id, name)
+                    .detail(format!(
+                        "the upload to {target} failed; it waits at the back of the queue"
+                    )),
+            );
+        }
+        for (rc_url, id, expiry) in &work.reschedule {
+            if *expiry <= 0.0 {
+                tracing::info!(
+                    item = id,
+                    "archive: retrying a failed upload, nothing else is waiting"
+                );
+            } else {
+                tracing::info!(
+                    item = id,
+                    seconds = expiry,
+                    "archive: failed upload moved to the back of rclone's queue"
+                );
+            }
+            if !archive::set_expiry(archive::client(), rc_url, *id, *expiry).await {
+                warn_once(
+                    &format!("archive reschedule {}", archive::redact(rc_url)),
+                    "rclone's rc did not take a new time for a failed upload",
+                );
+            }
         }
         // As many as the copy limit lets the pass choose. Each one counts the
         // room the ones before it, and the moves already running, are about to
@@ -2000,6 +2045,10 @@ struct ArchiveWork {
     /// Moves already running, as destination and size: room they will take
     /// that the destination does not report yet.
     in_flight: Vec<(String, i64)>,
+    /// Failed uploads to move in rclone's queue: rc URL, item id, new expiry.
+    reschedule: Vec<(String, i64, f64)>,
+    /// Torrents whose upload has just failed: id, name, target, tries.
+    failed: Vec<(String, String, String, i64)>,
 }
 
 /// The archive's two global limits, from Preferences, Archive.
@@ -2017,7 +2066,7 @@ fn sweep_archives(
     state: &mut crate::manager::SessionState,
     targets: &[archive::Target],
     online: &[bool],
-    queues: &[Option<Vec<String>>],
+    queues: &[Option<Vec<archive::Queued>>],
     labels: &label::Settings,
     download: &str,
     limits: Limits,
@@ -2074,6 +2123,8 @@ fn sweep_archives(
     let mut to_clear: Vec<String> = Vec::new();
     let mut to_hold: Vec<(String, String)> = Vec::new();
     let mut to_unhold: Vec<(String, String)> = Vec::new();
+    // Torrents whose every queued file has failed: target, id, those files.
+    let mut failed_uploads: Vec<(usize, String, Vec<archive::Queued>)> = Vec::new();
     let mut hand_resumed = false;
 
     for status in &statuses {
@@ -2096,6 +2147,7 @@ fn sweep_archives(
         // Where it is going wins over where it is: a move onto a target says
         // that target from its first second.
         torrent.archive_target = going.or(here).map(|target| target.name.clone());
+        let before = torrent.archive_state;
         torrent.archive_state = match (here, going) {
             (_, Some(going)) if here.map(|h| &h.path) != Some(&going.path) => {
                 Some(ArchiveState::Archiving)
@@ -2111,15 +2163,45 @@ fn sweep_archives(
                         status.name
                     );
                     match &queues[index] {
-                        Some(queue) if archive::is_syncing(&relative, queue) => {
-                            Some(ArchiveState::Syncing)
+                        Some(queue) => {
+                            let mine = archive::queued_for(&relative, queue);
+                            if mine.is_empty() {
+                                Some(ArchiveState::Archived)
+                            } else if mine.iter().all(|item| item.failed()) {
+                                // Every file of it has been tried and failed:
+                                // out of the way of the others until they are
+                                // done, then tried again.
+                                failed_uploads.push((
+                                    index,
+                                    status.info_hash.clone(),
+                                    mine.into_iter().cloned().collect(),
+                                ));
+                                Some(ArchiveState::SyncError)
+                            } else {
+                                Some(ArchiveState::Syncing)
+                            }
                         }
-                        _ => Some(ArchiveState::Archived),
+                        None => Some(ArchiveState::Archived),
                     }
                 }
             }
             (None, _) => None,
         };
+
+        if torrent.archive_state == Some(ArchiveState::SyncError)
+            && before != Some(ArchiveState::SyncError)
+        {
+            let tries = failed_uploads
+                .last()
+                .map(|(_, _, files)| files.iter().map(|item| item.tries).max().unwrap_or(0))
+                .unwrap_or(0);
+            work.failed.push((
+                status.info_hash.clone(),
+                status.name.clone(),
+                here.map(|target| target.name.clone()).unwrap_or_default(),
+                tries,
+            ));
+        }
 
         // ------------------------------------------------ upload hold
         // Paused from before the copy until rclone has uploaded it, then let
@@ -2211,6 +2293,9 @@ fn sweep_archives(
         }
     }
     let copies_full = |queued: usize| moving_count + queued >= limits.moves;
+    // Targets that something is waiting to go to, in this pass: what decides
+    // whether a failed upload stays at the back of the queue.
+    let mut wanting = vec![false; targets.len()];
 
     // ------------------------------------------------------------- moves
     // Every torrent a label wants archived gets a move, or a note saying what
@@ -2227,7 +2312,11 @@ fn sweep_archives(
         })
         .map(|status| status.name.clone());
     let mut notes: Vec<(String, String)> = Vec::new();
-    for status in &statuses {
+    // Biggest first: when the limits leave room for only some of them, the
+    // ones that free the most local disk go first. The rest keep their order.
+    let mut by_size: Vec<&redeluge_libtorrent::TorrentStatus> = statuses.iter().collect();
+    by_size.sort_by_key(|status| std::cmp::Reverse(status.total_wanted.max(status.total_done)));
+    for status in by_size {
         let Some(torrent) = state.torrents.get(&status.info_hash) else {
             continue;
         };
@@ -2286,6 +2375,7 @@ fn sweep_archives(
                     to: home.clone(),
                     size: status.total_wanted.max(status.total_done),
                     which: rule::ARCHIVE,
+                    target_name: None,
                     to_archive: false,
                     hold: false,
                     detail: format!("label {label_name} brings archived torrents back to {home}"),
@@ -2339,6 +2429,7 @@ fn sweep_archives(
         let waiting = match verdict {
             archive::Verdict::Move => {
                 on_their_way[index_of(target).unwrap_or(0)] += 1;
+                wanting[index_of(target).unwrap_or(0)] = true;
                 work.moves.push(RuleMove {
                     id: status.info_hash.clone(),
                     name: status.name.clone(),
@@ -2347,6 +2438,7 @@ fn sweep_archives(
                     to: target.path.clone(),
                     size: status.total_wanted.max(status.total_done),
                     which: rule::ARCHIVE,
+                    target_name: Some(target.name.clone()),
                     to_archive: true,
                     hold: !target.rc_url.is_empty(),
                     detail: format!(
@@ -2357,7 +2449,12 @@ fn sweep_archives(
                 None
             }
             archive::Verdict::Moving => None,
-            archive::Verdict::Wait(note) => Some(note),
+            archive::Verdict::Wait(note) => {
+                if note.starts_with("queued") {
+                    wanting[index_of(target).unwrap_or(0)] = true;
+                }
+                Some(note)
+            }
         };
         if let Some(note) = waiting {
             notes.push((status.info_hash.clone(), note));
@@ -2375,6 +2472,38 @@ fn sweep_archives(
         if torrent.options.archive_upload_held {
             torrent.archive_note =
                 "paused while rclone uploads it; it resumes when the upload is done".to_owned();
+        }
+    }
+
+    // ------------------------------------------------------ failed uploads
+    // At the back of rclone's queue while anything else is going to the same
+    // target, and brought forward once nothing is: one file that keeps
+    // failing must neither block the others nor be retried in a loop.
+    for (index, id, files) in failed_uploads {
+        let others_waiting = on_their_way[index] > 0 || wanting[index];
+        let target = &targets[index];
+        for item in &files {
+            if let Some(expiry) = archive::reschedule(item, others_waiting) {
+                work.reschedule
+                    .push((target.rc_url.clone(), item.id, expiry));
+            }
+        }
+        let tries = files.iter().map(|item| item.tries).max().unwrap_or(0);
+        if let Some(torrent) = state.torrents.get_mut(&id) {
+            torrent.archive_note = if others_waiting {
+                format!(
+                    "the upload to {} failed ({tries} tr{}); it waits at the back of the queue and is tried again when nothing else is going to {}",
+                    target.name,
+                    if tries == 1 { "y" } else { "ies" },
+                    target.name
+                )
+            } else {
+                format!(
+                    "the upload to {} failed ({tries} tr{}); nothing else is waiting, so rclone tries it again on its own schedule",
+                    target.name,
+                    if tries == 1 { "y" } else { "ies" }
+                )
+            };
         }
     }
 

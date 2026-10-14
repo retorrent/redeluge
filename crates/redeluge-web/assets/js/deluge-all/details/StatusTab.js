@@ -126,10 +126,13 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
         var what = {
             archiving: _('being moved to {0}'),
             syncing: _('on {0}, rclone is uploading it'),
+            sync_error: _('on {0}'),
             archived: _('on {0}, seeding from the archive'),
             offline: _('on {0}, which is offline: paused until it answers'),
         }[status.archive_state];
-        var line = what ? String.format(what, esc(target || '')) : _('on local disk');
+        var line = what
+            ? String.format(what, esc(target || _('its archive')))
+            : _('on local disk');
         return note ? line + ' — ' + note : line;
     },
 

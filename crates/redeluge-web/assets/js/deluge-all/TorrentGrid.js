@@ -21,18 +21,10 @@
      * client and *arr understands.
      */
     function archiveLabel(r) {
-        return Deluge.archiveLabel(r.data);
+        return Deluge.archiveView(r.data).label;
     }
-    /** Which icon: the error one in orange, or the seeding one in cyan. */
     function archiveIcon(r) {
-        var archive = r.data['archive_state'];
-        if (archive === 'offline') return 'remoteerror';
-        if (archive === 'archiving' || archive === 'syncing' || archive === 'archived') {
-            return r.data['state'] === 'Seeding' || archive !== 'archived'
-                ? 'remoteseed'
-                : null;
-        }
-        return null;
+        return Deluge.archiveView(r.data).icon;
     }
     function torrentNameRenderer(value, p, r) {
         // `state` is what picks the icon. A record without it used to throw
@@ -228,12 +220,7 @@
                 width: 100,
                 sortable: true,
                 renderer: function (value, p, r) {
-                    var shown = {
-                        archiving: _('Moving'),
-                        syncing: _('Uploading'),
-                        archived: _('Archived'),
-                        offline: _('Offline'),
-                    }[value];
+                    var shown = Deluge.archiveView(r.data).column;
                     var note = r.data['archive_note'];
                     if (shown) {
                         return note
@@ -341,11 +328,14 @@
                 dataIndex: 'tracker_host',
             },
             {
-                header: _('Download Folder'),
+                header: _('Location'),
                 hidden: true,
-                width: 120,
+                width: 160,
                 sortable: true,
-                renderer: fplain,
+                // The archive's name for a torrent on one, not its mount path.
+                renderer: function (value, p, r) {
+                    return Ext.util.Format.htmlEncode(Deluge.locationText(r.data, value));
+                },
                 dataIndex: 'download_location',
             },
             {
@@ -710,7 +700,14 @@
             // measured, it is about four milliseconds for five thousand rows,
             // which is not worth being clever about.
             var sortState = store.getSortState();
-            if (!sortState) return;
+            if (!sortState) {
+                // No column sorted: nothing else will repaint the rows, and
+                // they kept showing the state of the first time they were
+                // drawn — a torrent paused for its upload still read Remote
+                // Seed until the page was reloaded.
+                this.getView().refresh();
+                return;
+            }
             store.sort(sortState.field, sortState.direction);
         },
 

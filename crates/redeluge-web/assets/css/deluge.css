@@ -133,6 +133,11 @@ button::-moz-focus-inner {
     background-image: url('../icons/seeding.png');
     filter: hue-rotate(-40deg) saturate(1.6);
 }
+/* Being uploaded to its archive by rclone: the seeding icon, turned violet. */
+.x-deluge-remoteupload {
+    background-image: url('../icons/seeding.png');
+    filter: hue-rotate(55deg) saturate(1.8);
+}
 /* Held because its archive does not answer: the error icon, turned orange. */
 .x-deluge-remoteerror {
     background-image: url('../icons/alert.png');
@@ -863,6 +868,10 @@ table.x-deluge-tracker-info td {
 
 .icon-move {
     background-image: url('../icons/move.png') !important;
+}
+
+.icon-drive {
+    background-image: url('../icons/drive.png') !important;
 }
 
 /* The menu that puts a torrent in a label. Deluge's own icon for a filter

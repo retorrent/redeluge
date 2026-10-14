@@ -87,6 +87,7 @@ pub const REDELUGE_METHODS: &[&str] = &[
     "redeluge.get_recent_actions",
     "redeluge.get_storage",
     "redeluge.get_archive_info",
+    "redeluge.get_torrent_archive",
     "redeluge.get_peers",
     "redeluge.get_tracker_health",
     "redeluge.get_tracker_info",
@@ -2131,6 +2132,13 @@ impl Rpc for Core {
             // page shows it.
             "redeluge.get_archive_info" => Ok(json_to_value(&self.archive_info().await)),
 
+            // Everything the archive knows about one torrent, and what rclone
+            // says about its files: for the Archive info window.
+            "redeluge.get_torrent_archive" => {
+                let id = string_arg(&args, 0, "a torrent id")?;
+                Ok(json_to_value(&self.torrent_archive(&id).await?))
+            }
+
             "redeluge.get_recent_actions" => {
                 let limit = args
                     .first()
@@ -3276,6 +3284,155 @@ impl Core {
     /// `core.remove_torrent` does.
     /// Each archive target: its settings, whether it answers, what rclone
     /// says about itself behind it, and the labels that use it.
+    /// One torrent as the archive sees it: where it is, what its label asks,
+    /// the archive's own flags, and rclone's queue and transfer entries for
+    /// its files. Nothing here waits on a mount: rclone answers through its
+    /// rc, with a timeout.
+    async fn torrent_archive(&self, id: &str) -> Result<serde_json::Value, RpcError> {
+        use crate::features::archive;
+        use serde_json::json;
+
+        let (targets, labels) = {
+            let config = self.config.lock().await;
+            (
+                archive::Settings::from_config(config.get("archive")).usable(),
+                crate::features::label::Settings::from_config(config.get("label")),
+            )
+        };
+        let found = {
+            let id = id.to_owned();
+            self.manager
+                .with(move |state| {
+                    let status = state.session.torrent_status(&id).ok()?;
+                    let torrent = state.torrents.get(&id)?;
+                    Some((
+                        status.name.clone(),
+                        status.save_path.clone(),
+                        torrent.state(&status, state.session_paused).to_string(),
+                        torrent.options.label.clone(),
+                        torrent.archive_state.map(|archived| archived.as_str()),
+                        torrent.archive_target.clone(),
+                        torrent.archive_note.clone(),
+                        torrent.moving_to.clone(),
+                        json!({
+                            "held_for_upload": torrent.options.archive_upload_held,
+                            "held_while_offline": torrent.options.archive_paused,
+                            "resumed_by_hand": torrent.upload_hold_declined,
+                            "paused": status.is_paused,
+                            "moving": status.moving_storage || torrent.moving_to.is_some(),
+                            "finished": status.is_finished,
+                            "size": status.total_wanted.max(status.total_done),
+                            "since_upload": status.time_since_upload,
+                            "since_download": status.time_since_download,
+                        }),
+                        state.archive_offline.clone(),
+                    ))
+                })
+                .await
+                .map_err(|err| RpcError::invalid_argument(err.to_string()))?
+        };
+        let Some((
+            name,
+            save_path,
+            state,
+            label,
+            archive_state,
+            target_name,
+            note,
+            moving_to,
+            flags,
+            offline_paths,
+        )) = found
+        else {
+            return Err(RpcError::new("InvalidTorrentError", "no such torrent"));
+        };
+
+        let rule = labels.options(&label).map(|options| {
+            json!({
+                "archive": options.apply_archive,
+                "target": options.archive_target,
+                "after_hours": options.archive_after_hours,
+                "restore_local": options.restore_local,
+            })
+        });
+        let target = target_name
+            .as_deref()
+            .and_then(|name| targets.iter().find(|target| target.name == name))
+            .or_else(|| archive::target_of(&save_path, &targets));
+
+        let mut rclone = json!({ "rc": "none" });
+        if let Some(target) = target.filter(|target| !target.rc_url.is_empty()) {
+            let relative = format!(
+                "{}/{}",
+                save_path
+                    .get(target.path.len()..)
+                    .unwrap_or("")
+                    .trim_matches('/'),
+                name
+            )
+            .trim_start_matches('/')
+            .to_owned();
+            let client = archive::client();
+            match archive::upload_queue(client, &target.rc_url).await {
+                Some(queue) => {
+                    let mine: Vec<serde_json::Value> = archive::queued_for(&relative, &queue)
+                        .into_iter()
+                        .map(|item| {
+                            json!({
+                                "id": item.id,
+                                "name": item.name,
+                                "tries": item.tries,
+                                "uploading": item.uploading,
+                                "next_try_in": item.expiry,
+                                "failed": item.failed(),
+                            })
+                        })
+                        .collect();
+                    let sending: Vec<serde_json::Value> =
+                        archive::transfers(client, &target.rc_url)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .filter(|entry| {
+                                entry
+                                    .get("name")
+                                    .and_then(serde_json::Value::as_str)
+                                    .is_some_and(|file| {
+                                        archive::is_syncing(&relative, &[file.to_owned()])
+                                    })
+                            })
+                            .collect();
+                    rclone = json!({
+                        "rc": "ok",
+                        "relative": relative,
+                        "queue": mine,
+                        "transfers": sending,
+                    });
+                }
+                None => rclone = json!({ "rc": "unreachable" }),
+            }
+        }
+
+        Ok(json!({
+            "name": name,
+            "state": state,
+            "label": label,
+            "location": save_path,
+            "moving_to": moving_to,
+            "archive_state": archive_state.unwrap_or(""),
+            "note": note,
+            "target": target.map(|target| json!({
+                "name": target.name,
+                "path": target.path,
+                "rc_url": archive::redact(&target.rc_url),
+                "online": !offline_paths.contains(&target.path),
+            })),
+            "rule": rule,
+            "flags": flags,
+            "rclone": rclone,
+        }))
+    }
+
     async fn archive_info(&self) -> serde_json::Value {
         use crate::features::archive;
 

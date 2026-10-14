@@ -182,19 +182,44 @@ FILE_PRIORITY_CSS = {
 };
 
 /**
- * What the archive is doing with a torrent, as the progress bar says it, or
- * null when its files are simply local. Only how it is drawn: the daemon's
- * `state` stays `Seeding` or `Paused`, which is what every client understands.
+ * How a torrent's archive state is drawn, in one place so the progress bar,
+ * the icon and the Archive column can never say two different things.
+ *
+ * `label` replaces the state word in the progress bar, `icon` the state icon,
+ * `column` is the Archive column; each is null when the torrent's own state
+ * says it better. Only how it is drawn: the daemon's `state` stays `Seeding`,
+ * `Paused` or `Moving`, which is what every client and *arr understands.
  */
-Deluge.archiveLabel = function (data) {
+Deluge.archiveView = function (data) {
     var archive = data['archive_state'];
-    if (archive === 'offline') return _('Remote Error');
-    if (archive === 'archiving') return _('Moving to archive');
-    // Shown paused or not: the rule holds it paused while rclone uploads.
-    if (archive === 'syncing') return _('Uploading to archive');
-    if (data['state'] !== 'Seeding') return null;
-    if (archive === 'archived') return _('Remote Seed');
-    return null;
+    var state = data['state'];
+    switch (archive) {
+        case 'offline':
+            return { label: _('Remote Error'), icon: 'remoteerror', column: _('Offline') };
+        case 'sync_error':
+            return { label: _('Sync Error'), icon: 'remoteerror', column: _('Sync error') };
+        case 'archiving':
+            return { label: _('Moving to archive'), icon: 'moving', column: _('Moving in') };
+        case 'syncing':
+            // Paused while rclone sends it, so the state word would say
+            // Paused: what matters is that it is uploading.
+            return { label: _('Uploading'), icon: 'remoteupload', column: _('Uploading') };
+        case 'archived':
+            if (state === 'Moving') {
+                return { label: _('Leaving archive'), icon: 'moving', column: _('Moving out') };
+            }
+            if (state === 'Seeding') {
+                return { label: _('Remote Seed'), icon: 'remoteseed', column: _('Archived') };
+            }
+            return { label: null, icon: null, column: _('Archived') };
+        default:
+            return { label: null, icon: null, column: null };
+    }
+};
+
+/** The progress bar's word for the archive state, or null. */
+Deluge.archiveLabel = function (data) {
+    return Deluge.archiveView(data).label;
 };
 
 /**
@@ -207,6 +232,7 @@ Deluge.locationText = function (data, path) {
     var where = {
         archiving: _('moving to {0}'),
         syncing: _('{0}, uploading'),
+        sync_error: _('{0} (archive, upload failed)'),
         archived: _('{0} (archive)'),
         offline: _('{0} (archive, offline)'),
     }[data['archive_state']] || _('{0} (archive)');

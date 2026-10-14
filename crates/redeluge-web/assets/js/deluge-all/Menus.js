@@ -132,6 +132,9 @@ deluge.menus = {
             case 'ban':
                 Deluge.BannedWindow.ban(ids);
                 break;
+            case 'archive_info':
+                if (ids.length) Deluge.ArchiveInfoWindow.open(ids[0]);
+                break;
         }
     },
 };
@@ -458,8 +461,15 @@ deluge.menus.torrent = new Ext.menu.Menu({
         },
         {
             torrentAction: 'move',
-            text: _('Move Download Folder'),
+            text: _('Change Location'),
             iconCls: 'icon-move',
+            handler: deluge.menus.onTorrentActionShow,
+            scope: deluge.menus,
+        },
+        {
+            torrentAction: 'archive_info',
+            text: _('Archive Info'),
+            iconCls: 'icon-drive',
             handler: deluge.menus.onTorrentActionShow,
             scope: deluge.menus,
         },

@@ -8,7 +8,38 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
-## [Unreleased]
+## [1.10.5] — 2026-10-14
+
+### Added
+
+- **Sync Error.** An upload rclone has tried and failed puts its torrent in
+  *Sync Error* (orange): still paused, out of the per-target upload count, and
+  moved to the back of rclone's queue (`vfs/queue-set-expiry`) for as long as
+  anything else is waiting to go to that target. Once nothing is, it is tried
+  again; a file that keeps failing is retried at most every five minutes,
+  never in a loop. *Activity* and the log say when it happens.
+- **Archive Info**, in a torrent's right-click menu: where it is, its label's
+  rule, the archive's own flags (paused for its upload, held while offline…),
+  and what rclone says about its files — the queue entry with its tries and
+  next attempt, and the transfer in progress with percentage, speed and time
+  left. Refreshes itself while open (`redeluge.get_torrent_archive`).
+- **When several torrents are ready to go and the limits only let some
+  through, the biggest go first**: they free the most local disk.
+- **Log lines for each step of the archive**: paused for its upload, upload
+  done, upload failed, moved in rclone's queue, retried.
+
+### Fixed
+
+- **Rows of the torrent list stopped updating when no column was sorted.**
+  Only a sort repainted them, so with none they kept showing the state they
+  were first drawn in — a torrent paused for its upload still read *Remote
+  Seed* until the page was reloaded.
+- The progress bar, the icon and the *Archive* column now come from one
+  function and can no longer disagree: *Uploading* with a violet icon while
+  rclone sends it, *Moving to archive* during the copy, *Leaving archive* on
+  the way back, *Remote Seed*, *Remote Error*, *Sync Error*.
+- The archive target's name is known from the first second of the move, so the
+  *Status* tab no longer reads *on , rclone is uploading it*.
 
 ### Changed
 
@@ -36,6 +67,9 @@ may refuse the new one.
     the reason instead of cutting it; a schedule change reads *switched to
     full speed* rather than *moved to Green*.
   - A torrent's *Options* tab keeps its labels on one line.
+  - *Move Download Folder* is *Change Location*, and the hidden *Download
+    Folder* column is *Location*, showing the archive's name for a torrent on
+    one.
 
 ## [1.10.4] — 2026-10-14
 
