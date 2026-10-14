@@ -16,7 +16,7 @@ import os
 import sys
 import urllib.request
 
-URL = "http://127.0.0.1:8112/json"
+URL = os.environ.get("LAB_URL", "http://127.0.0.1:8112/json")
 jar = http.cookiejar.CookieJar()
 opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
 _id = 0
@@ -122,6 +122,22 @@ def status():
         )
 
 
+def port():
+    login()
+    print(call("core.get_listen_port"))
+
+
+def peer(info_hash, host, listen_port):
+    """Run on the peer: fetch a torrent from the lab's daemon only."""
+    import socket
+
+    login()
+    torrent = call("core.add_torrent_magnet", f"magnet:?xt=urn:btih:{info_hash}", {})
+    address = socket.gethostbyname(host)
+    call("core.connect_peer", torrent, address, int(listen_port))
+    print("peer added", torrent, "from", address, listen_port)
+
+
 def remove(number):
     login()
     found = sorted(call("core.get_torrents_status", {}, ["name"]).items())
@@ -130,4 +146,5 @@ def remove(number):
 
 
 if __name__ == "__main__":
-    {"seed": seed, "status": status, "remove": remove}[sys.argv[1]](*sys.argv[2:])
+    commands = {"seed": seed, "status": status, "remove": remove, "port": port, "peer": peer}
+    commands[sys.argv[1]](*sys.argv[2:])

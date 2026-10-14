@@ -24,8 +24,9 @@
         var archive = r.data['archive_state'];
         if (archive === 'offline') return _('Remote Error');
         if (archive === 'archiving') return _('Moving to archive');
-        if (r.data['state'] !== 'Seeding') return null;
+        // Shown paused or not: the rule holds it paused while rclone uploads.
         if (archive === 'syncing') return _('Uploading to archive');
+        if (r.data['state'] !== 'Seeding') return null;
         if (archive === 'archived') return _('Remote Seed');
         return null;
     }
@@ -34,7 +35,7 @@
         var archive = r.data['archive_state'];
         if (archive === 'offline') return 'remoteerror';
         if (archive === 'archiving' || archive === 'syncing' || archive === 'archived') {
-            return r.data['state'] === 'Seeding' || archive === 'archiving'
+            return r.data['state'] === 'Seeding' || archive !== 'archived'
                 ? 'remoteseed'
                 : null;
         }

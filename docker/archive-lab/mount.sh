@@ -13,7 +13,7 @@ case $action in
     up)
         rclone mount "$remote" "/mnt/$which" \
             --vfs-cache-mode full --vfs-cache-max-size 2G \
-            --vfs-write-back 5s --cache-dir "/cache/$which" \
+            --vfs-write-back "${LAB_WRITE_BACK:-5s}" --cache-dir "/cache/$which" \
             --rc --rc-addr "127.0.0.1:$port" --rc-no-auth \
             --log-file "/var/log/rclone-$which.log" --log-level INFO &
         echo $! > "$pidfile"

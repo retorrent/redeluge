@@ -31,6 +31,9 @@ services:
       # Targets to leave unmounted at start, e.g. LAB_DOWN=a: a restart
       # during an outage.
       LAB_DOWN: ${LAB_DOWN:-}
+      # How long rclone waits before uploading a closed file. Longer makes
+      # the upload window easy to watch, and to hit with a peer.
+      LAB_WRITE_BACK: ${LAB_WRITE_BACK:-5s}
     volumes:
       - ../..:/src:ro
       - config:/config
@@ -39,6 +42,23 @@ services:
     ports:
       - "127.0.0.1:18112:8112"
     command: ["bash", "/src/docker/archive-lab/start.sh"]
+
+  peer:
+    # A second redeluge with no archive, to download from the first one:
+    # the demand that has to stop an archive upload.
+    build: .
+    environment:
+      DELUGE_WEB_PASSWORD: deluge
+    volumes:
+      - ../..:/src:ro
+    command:
+      - bash
+      - -c
+      - |
+        export PATH=/src/target-docker/debug:$$PATH DELUGE_CONFIG_DIR=/config DELUGE_DOWNLOAD_DIR=/downloads
+        export DELUGE_WEB_INTERFACE=0.0.0.0 DELUGE_WEB_PORT=8112 DELUGE_WEB_BASE=/
+        mkdir -p /config /downloads
+        exec bash /src/docker/run.sh
 
 volumes:
   config:

@@ -8,6 +8,35 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.10.3] — 2026-10-14
+
+### Added
+
+- **How much the archive does at once**, in Preferences, Archive, for the
+  whole platform: *Torrents copied at once* (`max_moves`, 1 by default, up to
+  16) — moves into or out of archives, all targets together — and *On their
+  way to each target at once* (`max_uploads`, 0 for no limit) — per target,
+  torrents being copied in or still being uploaded by rclone. A torrent held
+  back says so (*queued: 2 already on their way to s4*). Moves started side by
+  side count the room the others are about to take at the same destination,
+  so the free-space guard still holds.
+
+### Fixed
+
+- **An archive upload could restart for ever.** rclone takes a file opened
+  during its upload as changed, cancels the upload and starts again once the
+  file is closed. A torrent seeding while rclone uploads it reopens its files
+  every time a peer asks, so with peers coming and going the upload never
+  finished: one install sent 366 GB in 14 hours for a few files. Now a
+  torrent whose files are asked for during their upload was not idle after
+  all: it is moved back to the folder it came from, which removes it from the
+  mount and so cancels the upload, and it is not archived again before its
+  label's delay has passed again (an hour at least). When it cannot go back —
+  no room, or another move running — it is held paused until rclone has
+  finished instead, and let go then. The *Activity* window and the torrent's
+  *Archive* note say which.
+- *Uploading to archive* is shown while the torrent is paused as well.
+
 ## [1.10.2] — 2026-10-13
 
 ### Changed

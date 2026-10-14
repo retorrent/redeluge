@@ -120,6 +120,22 @@ pub struct TorrentOptions {
     /// Whether the queue managed it before that pause.
     #[serde(default = "yes")]
     pub archive_was_managed: bool,
+    /// Whether the archive rule paused it while rclone uploads its files.
+    ///
+    /// Seeding during the upload reopens the files, and rclone takes a file
+    /// opened during its upload as changed: it cancels and starts again, for
+    /// ever while peers keep asking. Saved, so a restart mid-upload still
+    /// knows to let it go once the upload is done.
+    #[serde(default)]
+    pub archive_upload_held: bool,
+    /// Where its files were before the archive took them, so that a move the
+    /// archive has to undo puts them back where they came from.
+    #[serde(default)]
+    pub archive_origin: String,
+    /// Not archived again before this time, in Unix seconds: set when peers
+    /// asked for it during its upload and the archive gave it back.
+    #[serde(default)]
+    pub archive_not_before: f64,
 
     /// Trackers the user added or reordered, kept because libtorrent forgets
     /// them when a torrent is removed and re-added from resume data.
@@ -183,6 +199,9 @@ impl Default for TorrentOptions {
             space_paused: false,
             archive_paused: false,
             archive_was_managed: true,
+            archive_upload_held: false,
+            archive_origin: String::new(),
+            archive_not_before: 0.0,
             space_was_managed: true,
             trackers: Vec::new(),
         }
@@ -218,6 +237,12 @@ pub struct Torrent {
     pub archive_retry_at: f64,
     /// Why its label's archive rule has not moved it yet, or empty.
     pub archive_note: String,
+    /// Resumed by hand while held for an upload: not held again until that
+    /// upload is over. Somebody pressing Resume outranks the rule.
+    pub upload_hold_declined: bool,
+    /// When its copy into the archive finished, in Unix seconds, or zero:
+    /// any upload to a peer after this is demand during rclone's upload.
+    pub archived_at: f64,
 }
 
 /// Which status keys a caller asked for.
@@ -263,6 +288,8 @@ impl Torrent {
             archive_state: None,
             archive_retry_at: 0.0,
             archive_note: String::new(),
+            upload_hold_declined: false,
+            archived_at: 0.0,
         }
     }
 

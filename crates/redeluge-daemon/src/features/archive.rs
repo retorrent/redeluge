@@ -52,10 +52,33 @@ pub struct Target {
 }
 
 /// The `archive` key of `core.conf`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     #[serde(default)]
     pub targets: Vec<Target>,
+    /// How many torrents may be copied into or out of archives at once, all
+    /// targets together. One unless somebody raises it: each copy is the
+    /// whole torrent through the local disk.
+    #[serde(default = "one")]
+    pub max_moves: u32,
+    /// How many torrents may be on their way into each target at once —
+    /// being copied in, or uploaded by rclone — or zero for no limit.
+    #[serde(default)]
+    pub max_uploads: u32,
+}
+
+fn one() -> u32 {
+    1
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            targets: Vec::new(),
+            max_moves: one(),
+            max_uploads: 0,
+        }
+    }
 }
 
 impl Settings {
@@ -73,6 +96,17 @@ impl Settings {
 
     pub fn default_json() -> Json {
         serde_json::to_value(Self::default()).expect("the defaults serialise")
+    }
+
+    /// Copies at once, bounded: zero would stop archiving altogether, and a
+    /// figure from a client in the thousands would only fill the disk.
+    pub fn moves_allowed(&self) -> usize {
+        self.max_moves.clamp(1, 16) as usize
+    }
+
+    /// Torrents on their way into one target at once, when limited.
+    pub fn uploads_allowed(&self) -> Option<usize> {
+        (self.max_uploads > 0).then(|| self.max_uploads.min(64) as usize)
     }
 
     /// The targets that can be used: a name and an absolute path each.
@@ -442,6 +476,12 @@ pub struct Candidate<'a> {
     /// Another move is running, or one was chosen earlier in this pass.
     pub queue_busy: bool,
     pub moving_name: Option<&'a str>,
+    /// Seconds before it may go again, after the archive gave it back
+    /// because peers asked for it during its upload. Zero for none.
+    pub cooldown: f64,
+    /// The target already has as many torrents on their way in as it is
+    /// allowed: the limit, to say so.
+    pub target_full: Option<usize>,
 }
 
 /// What to do with a torrent a label wants archived.
@@ -475,6 +515,12 @@ pub fn decide(candidate: &Candidate) -> Verdict {
     if candidate.source_offline {
         return wait("waiting: its current location is offline".to_owned());
     }
+    if candidate.cooldown > 0.0 {
+        return wait(format!(
+            "waiting: peers asked for it while it was uploading, so it came back; it can go again in {}",
+            duration(candidate.cooldown)
+        ));
+    }
     if candidate.idle.is_none_or(|idle| idle < candidate.wanted) {
         return wait(format!(
             "waiting: idle {} of the {} the label asks for",
@@ -485,9 +531,15 @@ pub fn decide(candidate: &Candidate) -> Verdict {
     if candidate.moving {
         return Verdict::Moving;
     }
+    if let Some(limit) = candidate.target_full {
+        return wait(format!(
+            "queued: {limit} already on their way to {}",
+            candidate.target
+        ));
+    }
     if candidate.queue_busy {
         return wait(format!(
-            "queued: one move at a time{}",
+            "queued: copies are at their limit{}",
             candidate
                 .moving_name
                 .map(|name| format!(", {name} is moving"))
@@ -495,6 +547,29 @@ pub fn decide(candidate: &Candidate) -> Verdict {
         ));
     }
     Verdict::Move
+}
+
+/// The least a torrent given back for demand waits before it goes again. A
+/// label that archives at once would otherwise send it straight back.
+// ponytail: a fixed hour; per label if somebody wants a longer one.
+pub const COOLDOWN_MIN: f64 = 3600.0;
+
+/// Whether a peer has been sent anything since the torrent's copy into the
+/// archive finished: demand during rclone's upload, which means it was not
+/// idle after all, and seeding it now reopens the files and makes rclone
+/// cancel and start the upload again.
+///
+/// `archived_at` is zero after a restart, when only the current rate says.
+pub fn asked_since_archived(
+    since_upload: i64,
+    upload_rate: i64,
+    archived_at: f64,
+    now: f64,
+) -> bool {
+    if upload_rate > 0 {
+        return true;
+    }
+    archived_at > 0.0 && since_upload >= 0 && (since_upload as f64) < now - archived_at
 }
 
 /// What one torrent on a target should have done to it this pass.
@@ -560,6 +635,31 @@ mod tests {
         .usable()
     }
 
+    #[test]
+    fn demand_counts_only_after_the_copy_into_the_archive() {
+        // Copied at 1000, now 1100: an upload 50 s ago happened after.
+        assert!(asked_since_archived(50, 0, 1000.0, 1100.0));
+        // One 500 s ago was before the copy, the seeding that made it idle-ish.
+        assert!(!asked_since_archived(500, 0, 1000.0, 1100.0));
+        // Never uploaded.
+        assert!(!asked_since_archived(-1, 0, 1000.0, 1100.0));
+        // After a restart only the rate says.
+        assert!(!asked_since_archived(5, 0, 0.0, 1100.0));
+        assert!(asked_since_archived(-1, 2048, 0.0, 1100.0));
+    }
+
+    #[test]
+    fn a_torrent_given_back_waits_out_its_cooldown() {
+        let back = Candidate {
+            cooldown: 1800.0,
+            ..ready()
+        };
+        match decide(&back) {
+            Verdict::Wait(note) => assert!(note.contains("can go again in 30m"), "{note}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
     fn ready() -> Candidate<'static> {
         Candidate {
             target: "s4",
@@ -573,7 +673,41 @@ mod tests {
             moving: false,
             queue_busy: false,
             moving_name: None,
+            cooldown: 0.0,
+            target_full: None,
         }
+    }
+
+    #[test]
+    fn a_full_target_queues_and_says_how_full() {
+        let full = Candidate {
+            target_full: Some(2),
+            ..ready()
+        };
+        assert_eq!(
+            decide(&full),
+            Verdict::Wait("queued: 2 already on their way to s4".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_limits_are_bounded_and_default_to_one_copy_and_no_upload_limit() {
+        let stored = Settings::from_config(Some(&serde_json::json!({"targets": []})));
+        assert_eq!(stored.moves_allowed(), 1);
+        assert_eq!(stored.uploads_allowed(), None);
+
+        let zero = Settings {
+            max_moves: 0,
+            ..stored.clone()
+        };
+        assert_eq!(zero.moves_allowed(), 1, "zero would stop archiving");
+        let silly = Settings {
+            max_moves: 900,
+            max_uploads: 900,
+            ..stored
+        };
+        assert_eq!(silly.moves_allowed(), 16);
+        assert_eq!(silly.uploads_allowed(), Some(64));
     }
 
     #[test]

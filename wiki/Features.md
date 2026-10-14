@@ -880,6 +880,24 @@ completed folder, or the download folder, one at a time and only if there is
 room. It is off by default because tracker rules relabel torrents on their
 own, and that must not pull an archive back onto a small disk unasked.
 
+While rclone uploads a torrent's files, seeding them would reopen them, and
+rclone takes a file opened during its upload as changed: it cancels and starts
+again. So a torrent that peers ask for during its upload goes back to the
+folder it came from — which cancels the upload — and waits its label's delay
+again, an hour at least, before it can be archived again: it was not idle
+after all. If it cannot go back (no room, another move running), it is paused
+until the upload is done instead. Both need the target's rc URL; without it
+there is no way to know an upload is under way.
+
+Two limits apply to the whole platform, in Preferences, *Archive*:
+
+| | |
+|---|---|
+| *Torrents copied at once* (`max_moves`) | Moves into or out of archives, all targets together. 1 by default, up to 16. Each copy goes through the local disk, and those started side by side count the room the others are about to take |
+| *On their way to each target at once* (`max_uploads`) | Per target, torrents being copied in or still being uploaded by rclone. 0, the default, for no limit. Counting uploads needs the target's rc URL |
+
+rclone's own `--transfers` still caps how many files it sends at once.
+
 When a label archives and a torrent has not gone yet, the *Archive* column
 says *Waiting* and the *Status* tab says why: the download is not finished,
 it has been idle for less than the label asks, another move is running, the

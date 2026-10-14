@@ -49,6 +49,42 @@ Deluge.preferences.Archive = Ext.extend(Ext.form.FormPanel, {
             emptyText: 's4 | /mnt/s4 | http://redeluge:secret@rclone-s4:5572',
         });
 
+        // For every target together: how much the archive does at once.
+        fieldset = this.add({
+            xtype: 'fieldset',
+            border: false,
+            title: _('Limits'),
+            autoHeight: true,
+            labelWidth: 220,
+        });
+        this.maxMoves = fieldset.add({
+            xtype: 'spinnerfield',
+            fieldLabel: _('Torrents copied at once:'),
+            labelSeparator: '',
+            width: 60,
+            value: 1,
+            minValue: 1,
+            maxValue: 16,
+            decimalPrecision: 0,
+        });
+        this.maxUploads = fieldset.add({
+            xtype: 'spinnerfield',
+            fieldLabel: _('On their way to each target at once:'),
+            labelSeparator: '',
+            width: 60,
+            value: 0,
+            minValue: 0,
+            maxValue: 64,
+            decimalPrecision: 0,
+        });
+        fieldset.add({
+            xtype: 'label',
+            text: _(
+                'Copied: torrents moving into or out of an archive, all targets together. Each copy goes through the local disk. On their way: per target, torrents being copied in or still being uploaded by rclone (needs its rc URL); 0 for no limit. rclone\'s own --transfers still caps how many files it sends at once.'
+            ),
+            style: 'display: block; margin: 2px 0 6px 0; opacity: 0.72;',
+        });
+
         fieldset = this.add({
             xtype: 'fieldset',
             border: false,
@@ -84,6 +120,10 @@ Deluge.preferences.Archive = Ext.extend(Ext.form.FormPanel, {
                                 return parts.join(' | ');
                             })
                             .join('\n')
+                    );
+                    this.maxMoves.setValue(Deluge.number(settings && settings['max_moves'], 1));
+                    this.maxUploads.setValue(
+                        Deluge.number(settings && settings['max_uploads'], 0)
                     );
                     this.loaded = true;
                 },
@@ -221,7 +261,13 @@ Deluge.preferences.Archive = Ext.extend(Ext.form.FormPanel, {
             targets.push({ name: parts[0], path: parts[1], rc_url: parts[2] || '' });
         });
         deluge.client.core.set_config(
-            { archive: { targets: targets } },
+            {
+                archive: {
+                    targets: targets,
+                    max_moves: Math.max(1, Math.round(Deluge.number(this.maxMoves.getValue(), 1))),
+                    max_uploads: Math.max(0, Math.round(Deluge.number(this.maxUploads.getValue(), 0))),
+                },
+            },
             { success: this.loadInfo, scope: this }
         );
     },
