@@ -388,6 +388,11 @@ fn sweep_idle(
         .collect();
 
     for id in due_back {
+        // To the back of the queue first. It kept its old position while
+        // paused, usually ahead of whatever took its slot, so handing it back
+        // to the queue as it was makes libtorrent stop a working download to
+        // restart this idle one, which then gets paused again, forever.
+        let _ = state.session.queue_bottom(&id);
         // Auto-management goes back on because the rule only ever takes
         // torrents that had it: one that is managed by hand is not the queue's
         // business and is never a candidate below.
