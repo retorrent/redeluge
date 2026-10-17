@@ -245,6 +245,11 @@ deluge.ui = {
             this.wanted = true;
             return;
         }
+        // Not logged in yet, or the method list not loaded: nothing to ask.
+        // Coming back to the tab on the login screen got here, threw on the
+        // missing method after `inFlight` was set, and left it set, so every
+        // poll after the login was dropped and the list never filled.
+        if (!deluge.client.web || !deluge.client.web.update_ui) return;
         this.wanted = false;
         this.inFlight = true;
 

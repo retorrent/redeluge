@@ -30,9 +30,8 @@ Deluge.details.StatusTab = Ext.extend(Ext.Panel, {
             id: 'deluge-details-status',
 
             border: false,
-            // Four columns of label and value side by side: narrower and the
-            // last one drops under the others.
-            width: 1200,
+            // Four columns of label and value side by side, kept on one row by
+            // a grid in the stylesheet rather than a width forced here.
             listeners: {
                 render: {
                     fn: function (panel) {

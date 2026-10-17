@@ -287,6 +287,30 @@ dl.singleline dd {
     margin: 10px;
 }
 
+/* Four columns that share the width instead of floating: floated, the fourth
+   dropped under the others whenever the panel was narrower than all four.
+   A value too long for its share is cut with an ellipsis, as everywhere in
+   this panel. */
+#torrentDetails .x-deluge-status .x-panel-body {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    column-gap: 12px;
+    align-items: start;
+}
+#torrentDetails .x-deluge-status .x-panel-body > br {
+    display: none;
+}
+#torrentDetails .x-deluge-status .x-panel-body > dl {
+    float: none;
+    min-width: 0;
+}
+#torrentDetails .x-deluge-status .x-panel-body > dl dd {
+    width: auto;
+}
+#torrentDetails .x-deluge-status .x-panel-body > dl.x-deluge-status-wide {
+    grid-column: 1 / -1;
+}
+
 .x-deluge-status dd.downloaded,
 .x-deluge-status dd.uploaded,
 .x-deluge-status dd.share,

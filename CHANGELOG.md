@@ -8,6 +8,39 @@ version the daemon reports to clients. It reported Deluge's `2.2.1` until then;
 a client that checks the version to decide whether it can speak to this daemon
 may refuse the new one.
 
+## [1.10.8] — 2026-10-17
+
+### Fixed
+
+- **A torrent paused for being idle stopped a working download every time it
+  came back.** It kept its place in the queue while paused, usually ahead of
+  the one that took its slot, so libtorrent stopped that one to restart it; it
+  went idle, was paused again, and so on for ever. It now goes to the back of
+  the queue when the hold ends.
+- **A restart shuffled the queue.** The torrent list was saved sorted by info
+  hash and re-added in that order, which is the order libtorrent queues them
+  in. It is saved in queue order now, and moving a torrent in the queue saves
+  it.
+- **The torrent list could stay empty after a login.** Coming back to the tab
+  while the login window was up started a refresh before the client knew its
+  methods; it failed half way and left a refresh marked as running, so every
+  one after it was skipped until the page was reloaded.
+
+### Changed
+
+- **Change Location browses the daemon's folders.** It opens where the torrent
+  is (or the download folder, for several) and lists the folders there; a click
+  picks one, a double click opens it. The path at the top is the destination,
+  and can still be typed into for a folder that does not exist yet.
+- **The Status tab keeps its four columns side by side.** They were floated
+  at fixed widths, so the fourth dropped under the others in a narrower
+  window; they now share the width, and a value too long for its share is cut
+  with an ellipsis.
+
+### Removed
+
+- `FileBrowser.js`, an empty window inherited from Deluge that nothing opened.
+
 ## [1.10.7] — 2026-10-14
 
 ### Added

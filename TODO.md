@@ -26,15 +26,15 @@ the browser, writes it on the daemon, seeds it, or all three.
       answers with files as well as directories and says which is which.
       `core.get_completion_paths` stays as it was: its shape is Deluge's, and a
       client written against it would not survive a new one.
-- [ ] **One call still monopolises a connection.** `core.create_torrent` blocks
-      the connection it arrived on for the length of the hashing, because the
-      listener awaits each message inline — which also means the event branch
-      of its `select!` is not polled, so progress events to that client queue up
-      behind the call they are about. The job form sidesteps it rather than
-      fixing it; anything else long-running will meet it again.
-- [ ] **`FileBrowser.js` is still a stub** inherited from upstream: forty-three
-      lines, four toolbar buttons, no behaviour. Nothing references it, and the
-      create window has its own browser. It should go, or become the shared one.
+- [x] **One call still monopolises a connection.** Fixed in the listener:
+      one task owns the socket's writing half, and every call other than the
+      three about the connection itself (`daemon.info`, `daemon.login`,
+      `daemon.set_event_interest`) runs on its own task, up to eight per
+      connection. Events and other calls no longer wait behind a long one. The
+      client in `redeluge-rpc` already matched replies by id. The ceiling: a
+      client with eight long calls in flight is slowed at the read, on purpose.
+- [x] **`FileBrowser.js` is gone.** Nothing referenced it but a commented-out
+      *Browse* button in `MoveStorage.js`, which went with it.
 
 ## Phase 1 leftovers
 
