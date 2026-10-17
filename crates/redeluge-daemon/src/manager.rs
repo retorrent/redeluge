@@ -286,11 +286,21 @@ impl SessionState {
         if !self.dirty {
             return Ok(());
         }
-        let options: Vec<&TorrentOptions> = self
+        // In queue order, because a restart re-adds them in the order of this
+        // file and libtorrent queues them in the order they are added. Sorted
+        // by hash, as the map is, every restart shuffled the queue. Seeds have
+        // no position (-1) and go after.
+        let mut options: Vec<(i32, &TorrentOptions)> = self
             .torrents
-            .values()
-            .map(|torrent| &torrent.options)
+            .iter()
+            .map(|(id, torrent)| {
+                let position = self.session.queue_position(id).unwrap_or(-1);
+                let key = if position < 0 { i32::MAX } else { position };
+                (key, &torrent.options)
+            })
             .collect();
+        options.sort_by_key(|(key, _)| *key);
+        let options: Vec<&TorrentOptions> = options.into_iter().map(|(_, o)| o).collect();
         // Compact rather than pretty: this is a file the daemon writes and the
         // daemon reads, and on a large library the indentation was most of it.
         // `tools/migrate_state.py` and anything else that wants to look at it

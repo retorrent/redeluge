@@ -1165,6 +1165,8 @@ impl Rpc for Core {
                                 _ => state.session.queue_bottom(&id),
                             };
                         }
+                        // The saved list is in queue order; see `save_state`.
+                        state.mark_dirty();
                     })
                     .await
                     .map_err(|err| RpcError::invalid_argument(err.to_string()))?;
